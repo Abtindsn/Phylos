@@ -7,6 +7,9 @@ control flow of the recursive analysis.
 import os
 import operator
 import uuid
+import hashlib
+import difflib
+from concurrent.futures import ThreadPoolExecutor, TimeoutError
 from langgraph.graph import StateGraph, END
 from typing import Dict, Any, List
 import google.generativeai as genai
@@ -15,30 +18,76 @@ from dotenv import load_dotenv
 # --- API and Model Configuration ---
 load_dotenv()
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-if not GEMINI_API_KEY:
-    raise ValueError("GEMINI_API_KEY not found in environment variables. Please create a .env file.")
+OFFLINE_MODE = os.getenv("PHYLOS_OFFLINE_MODE", os.getenv("PHYLOS_OFFLINE", "auto")).lower()
+FORCE_OFFLINE = OFFLINE_MODE in {"1", "true", "yes", "on", "offline", "stub"}
+REQUEST_TIMEOUT = float(os.getenv("PHYLOS_GEMINI_TIMEOUT", "8"))
 
-genai.configure(api_key=GEMINI_API_KEY)
+if FORCE_OFFLINE:
+    print("--- Offline mode enforced via PHYLOS_OFFLINE flag.")
 
-# Initialize the models
-# For a real-world scenario, you might use a more advanced model.
-llm = genai.GenerativeModel('gemini-pro')
+USE_GEMINI = bool(GEMINI_API_KEY) and not FORCE_OFFLINE
+
+if USE_GEMINI:
+    genai.configure(api_key=GEMINI_API_KEY)
+    llm = genai.GenerativeModel('gemini-pro')
+else:
+    if not GEMINI_API_KEY:
+        print("!!! GEMINI_API_KEY not found - running in offline stub mode.")
+    llm = None
+
 embedding_model = "models/embedding-001"
-
+_executor = ThreadPoolExecutor(max_workers=2)
+_gemini_embeddings_available = USE_GEMINI
+_gemini_summaries_available = USE_GEMINI
+STUB_EMBED_DIM = 128
 
 # --- Core Utilities ---
 
+def _stub_embedding(text: str) -> List[float]:
+    """Deterministic hashing-based embedding for offline mode."""
+    digest = hashlib.sha256(text.encode("utf-8")).digest()
+    vector: List[float] = []
+    seed = digest
+    while len(vector) < STUB_EMBED_DIM:
+        for byte in seed:
+            normalized = (byte / 255.0) * 2 - 1  # map to [-1, 1]
+            vector.append(normalized)
+            if len(vector) == STUB_EMBED_DIM:
+                break
+        seed = hashlib.sha256(seed).digest()
+    return vector
+
+def _stub_summary(parent: str, child: str) -> str:
+    """Simple textual diff summary without LLM access."""
+    if parent == child:
+        return "Child text is identical to parent."
+    matcher = difflib.SequenceMatcher(None, parent, child)
+    overlap = matcher.quick_ratio()
+    longest = matcher.find_longest_match(0, len(parent), 0, len(child))
+    snippet = child[longest.b:longest.b + min(80, longest.size)]
+    snippet = snippet or child[:80]
+    return (
+        f"Offline summary: similarity {overlap:.2f}. "
+        f"New emphasis around: \"{snippet.strip()}\""
+    )
+
 def embedder(text: str) -> List[float]:
     """Generates embeddings using the Gemini API."""
+    global _gemini_embeddings_available
+    if not _gemini_embeddings_available:
+        return _stub_embedding(text)
+
     print(f"--- Embedding content (first 50 chars): '{text[:50]}...'")
+    def _call():
+        return genai.embed_content(model=embedding_model, content=text, task_type="RETRIEVAL_DOCUMENT")
+
     try:
-        # The result is a list of floats.
-        embedding = genai.embed_content(model=embedding_model, content=text, task_type="RETRIEVAL_DOCUMENT")
+        embedding = _executor.submit(_call).result(timeout=REQUEST_TIMEOUT)
         return embedding['embedding']
-    except Exception as e:
-        print(f"!!! ERROR during embedding: {e}")
-        # Return a zero-vector on failure
-        return [0.0] * 768
+    except (TimeoutError, Exception) as e:
+        print(f"!!! ERROR during embedding: {e}. Falling back to offline stub embeddings.")
+        _gemini_embeddings_available = False
+        return _stub_embedding(text)
 
 def fetch_article_content(url: str) -> Dict[str, Any]:
     """Placeholder for a web scraping and content extraction service (e.g., using BeautifulSoup, Jina Reader)."""
@@ -73,28 +122,37 @@ def calculate_semantic_drift(vec1: List[float], vec2: List[float]) -> float:
 
 def summarize_mutation(parent_content: str, child_content: str) -> str:
     """Uses the LLM to generate a summary of the semantic difference."""
+    global _gemini_summaries_available
+    if not _gemini_summaries_available or llm is None:
+        return _stub_summary(parent_content, child_content)
+
     print("--- Generating mutation summary with LLM...")
+    prompt = f"""
+    Analyze the semantic difference between the two following texts.
+    PARENT TEXT:
+    ---
+    {parent_content[:2000]}
+    ---
+
+    CHILD TEXT:
+    ---
+    {child_content[:2000]}
+    ---
+
+    Concisely describe the mutation or change in narrative, tone, or key information.
+    Focus on what makes the CHILD TEXT different from the PARENT TEXT.
+    """
+
+    def _call():
+        return llm.generate_content(prompt)
+
     try:
-        prompt = f"""
-        Analyze the semantic difference between the two following texts.
-        PARENT TEXT:
-        ---
-        {parent_content[:2000]}
-        ---
-
-        CHILD TEXT:
-        ---
-        {child_content[:2000]}
-        ---
-
-        Concisely describe the mutation or change in narrative, tone, or key information.
-        Focus on what makes the CHILD TEXT different from the PARENT TEXT.
-        """
-        response = llm.generate_content(prompt)
+        response = _executor.submit(_call).result(timeout=REQUEST_TIMEOUT)
         return response.text
-    except Exception as e:
-        print(f"!!! ERROR during LLM summary generation: {e}")
-        return "LLM summary failed."
+    except (TimeoutError, Exception) as e:
+        print(f"!!! ERROR during LLM summary generation: {e}. Falling back to offline summary.")
+        _gemini_summaries_available = False
+        return _stub_summary(parent_content, child_content)
 
 
 # --- Graph Node Definitions ---
