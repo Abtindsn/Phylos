@@ -11,7 +11,6 @@
     <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
     <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
     <script src="https://unpkg.com/lucide@latest"></script>
-    <script src="https://unpkg.com/htm@3.1.1/dist/htm.min.js"></script>
     <style>
       .summary-box {
         padding: 12px;
@@ -91,7 +90,276 @@
       (function () {
         try {
       const { useState, useEffect, useRef } = React;
-      const html = htm.bind(React.createElement);
+
+      function createHtmlRenderer(createElement) {
+        const PLACE_PREFIX = "__HTMEXP__";
+        const PLACE_SUFFIX = "__";
+        const PLACE_PREFIX_LEN = PLACE_PREFIX.length;
+        const PLACE_SUFFIX_LEN = PLACE_SUFFIX.length;
+
+        function isWhitespace(str) {
+          return !str || /^[\s\r\n\t]+$/.test(str);
+        }
+
+        function matchPlaceholder(source, index, values) {
+          if (source.slice(index, index + PLACE_PREFIX_LEN) !== PLACE_PREFIX) {
+            return null;
+          }
+          let cursor = index + PLACE_PREFIX_LEN;
+          let digits = "";
+          const limit = source.length;
+          while (cursor < limit) {
+            const maybeSuffix = source.slice(cursor, cursor + PLACE_SUFFIX_LEN);
+            if (maybeSuffix === PLACE_SUFFIX) {
+              if (!digits) {
+                return null;
+              }
+              const valueIndex = Number(digits);
+              if (!Number.isFinite(valueIndex) || valueIndex >= values.length) {
+                return null;
+              }
+              return {
+                value: values[valueIndex],
+                length: cursor + PLACE_SUFFIX_LEN - index,
+              };
+            }
+            const ch = source[cursor];
+            if (ch >= "0" && ch <= "9") {
+              digits += ch;
+              cursor += 1;
+            } else {
+              return null;
+            }
+          }
+          return null;
+        }
+
+        function appendChild(list, child) {
+          if (child === null || child === undefined || child === false) {
+            return;
+          }
+          if (Array.isArray(child)) {
+            child.forEach((entry) => appendChild(list, entry));
+            return;
+          }
+          list.push(child);
+        }
+
+        function appendText(list, text, values) {
+          if (!text) {
+            return;
+          }
+          let buffer = "";
+          let cursor = 0;
+          while (cursor < text.length) {
+            const match = matchPlaceholder(text, cursor, values);
+            if (match) {
+              if (!isWhitespace(buffer)) {
+                let normalized = buffer;
+                if (normalized.indexOf("\n") >= 0 || normalized.indexOf("\r") >= 0) {
+                  normalized = normalized.trim();
+                }
+                if (normalized) {
+                  appendChild(list, normalized);
+                }
+              }
+              buffer = "";
+              appendChild(list, match.value);
+              cursor += match.length;
+            } else {
+              buffer += text[cursor];
+              cursor += 1;
+            }
+          }
+          if (!isWhitespace(buffer)) {
+            let normalized = buffer;
+            if (normalized.indexOf("\n") >= 0 || normalized.indexOf("\r") >= 0) {
+              normalized = normalized.trim();
+            }
+            if (normalized) {
+              appendChild(list, normalized);
+            }
+          }
+        }
+
+        function skipWhitespace(str, index) {
+          let cursor = index;
+          while (cursor < str.length && /\s/.test(str[cursor])) {
+            cursor += 1;
+          }
+          return cursor;
+        }
+
+        function readTagName(str, index, values) {
+          let cursor = skipWhitespace(str, index);
+          if (cursor >= str.length) {
+            return { name: "div", next: cursor };
+          }
+          const dynamic = matchPlaceholder(str, cursor, values);
+          if (dynamic) {
+            return { name: dynamic.value, next: cursor + dynamic.length };
+          }
+          let start = cursor;
+          while (cursor < str.length && /[A-Za-z0-9:_-]/.test(str[cursor])) {
+            cursor += 1;
+          }
+          const name = str.slice(start, cursor) || "div";
+          return { name, next: cursor };
+        }
+
+        function readAttribute(str, index, values) {
+          let cursor = index;
+          cursor = skipWhitespace(str, cursor);
+          const start = cursor;
+          while (cursor < str.length && !/[\s=/>]/.test(str[cursor])) {
+            cursor += 1;
+          }
+          const name = str.slice(start, cursor);
+          cursor = skipWhitespace(str, cursor);
+          let value = true;
+          if (str[cursor] === "=") {
+            cursor += 1;
+            cursor = skipWhitespace(str, cursor);
+            if (str[cursor] === '"') {
+              cursor += 1;
+              let literal = "";
+              while (cursor < str.length && str[cursor] !== '"') {
+                const match = matchPlaceholder(str, cursor, values);
+                if (match) {
+                  literal += match.value !== undefined ? String(match.value) : "";
+                  cursor += match.length;
+                } else {
+                  literal += str[cursor];
+                  cursor += 1;
+                }
+              }
+              cursor += 1;
+              value = literal;
+            } else {
+              const match = matchPlaceholder(str, cursor, values);
+              if (match) {
+                value = match.value;
+                cursor += match.length;
+              } else {
+                const startValue = cursor;
+                while (cursor < str.length && !/[\s/>]/.test(str[cursor])) {
+                  cursor += 1;
+                }
+                value = str.slice(startValue, cursor);
+              }
+            }
+          }
+          return { name, value, next: cursor };
+        }
+
+        function readAttributes(str, index, node, values) {
+          let cursor = index;
+          let selfClosing = false;
+          while (cursor < str.length) {
+            cursor = skipWhitespace(str, cursor);
+            if (cursor >= str.length) {
+              break;
+            }
+            const current = str[cursor];
+            if (current === ">") {
+              cursor += 1;
+              break;
+            }
+            if (current === "/" && str[cursor + 1] === ">") {
+              cursor += 2;
+              selfClosing = true;
+              break;
+            }
+            const attribute = readAttribute(str, cursor, values);
+            cursor = attribute.next;
+            if (attribute.name) {
+              node.props[attribute.name] = attribute.value;
+            }
+          }
+          return { next: cursor, selfClosing };
+        }
+
+        function createElementFromNode(node) {
+          if (!node) {
+            return null;
+          }
+          const args = [node.type, node.props];
+          if (node.children.length) {
+            node.children.forEach((child) => args.push(child));
+          }
+          return createElement.apply(null, args);
+        }
+
+        function parseMarkup(source, values) {
+          const root = { children: [] };
+          const stack = [root];
+          let cursor = 0;
+          while (cursor < source.length) {
+            const current = source[cursor];
+            if (current === "<") {
+              if (source[cursor + 1] === "/") {
+                cursor += 2;
+                while (cursor < source.length && source[cursor] !== ">") {
+                  const skip = matchPlaceholder(source, cursor, values);
+                  if (skip) {
+                    cursor += skip.length;
+                  } else {
+                    cursor += 1;
+                  }
+                }
+                cursor += 1;
+                const node = stack.pop();
+                if (!node) {
+                  throw new Error("Malformed template markup");
+                }
+                const parent = stack[stack.length - 1];
+                appendChild(parent.children, createElementFromNode(node));
+              } else {
+                cursor += 1;
+                const { name, next } = readTagName(source, cursor, values);
+                cursor = next;
+                const node = { type: name, props: {}, children: [] };
+                const attrState = readAttributes(source, cursor, node, values);
+                cursor = attrState.next;
+                if (attrState.selfClosing) {
+                  const parent = stack[stack.length - 1];
+                  appendChild(parent.children, createElementFromNode(node));
+                } else {
+                  stack.push(node);
+                }
+              }
+            } else {
+              const start = cursor;
+              while (cursor < source.length && source[cursor] !== "<") {
+                cursor += 1;
+              }
+              const textSegment = source.slice(start, cursor);
+              appendText(stack[stack.length - 1].children, textSegment, values);
+            }
+          }
+          if (stack.length !== 1) {
+            throw new Error("Unbalanced template detected");
+          }
+          return root.children;
+        }
+
+        return function html(strings, ...values) {
+          let markup = "";
+          for (let index = 0; index < strings.length; index += 1) {
+            markup += strings[index];
+            if (index < values.length) {
+              markup += PLACE_PREFIX + index + PLACE_SUFFIX;
+            }
+          }
+          const children = parseMarkup(markup, values);
+          if (children.length === 1) {
+            return children[0];
+          }
+          return createElement.apply(null, [React.Fragment, null].concat(children));
+        };
+      }
+
+      const html = createHtmlRenderer(React.createElement);
 
       const LucideIcon = ({ name, className }) => {
         const icon = window.lucide && window.lucide.icons && window.lucide.icons[name];
