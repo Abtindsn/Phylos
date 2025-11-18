@@ -4,19 +4,41 @@ Constructs the LangGraph StateGraph for the Narrative DNA Sequencer.
 This file defines the core logic nodes, their interactions, and the overall
 control flow of the recursive analysis.
 """
+import os
 import operator
 import uuid
 from langgraph.graph import StateGraph, END
 from typing import Dict, Any, List
+import google.generativeai as genai
+from dotenv import load_dotenv
 
-# Assuming a generic embedding function and web content utilities exist
-# In a real implementation, these would be robust services.
+# --- API and Model Configuration ---
+load_dotenv()
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+if not GEMINI_API_KEY:
+    raise ValueError("GEMINI_API_KEY not found in environment variables. Please create a .env file.")
+
+genai.configure(api_key=GEMINI_API_KEY)
+
+# Initialize the models
+# For a real-world scenario, you might use a more advanced model.
+llm = genai.GenerativeModel('gemini-pro')
+embedding_model = "models/embedding-001"
+
+
+# --- Core Utilities ---
+
 def embedder(text: str) -> List[float]:
-    """Placeholder for a sentence transformer or OpenAI embedding model."""
-    # This is a dummy implementation.
-    # A real one would call an actual model.
+    """Generates embeddings using the Gemini API."""
     print(f"--- Embedding content (first 50 chars): '{text[:50]}...'")
-    return [len(text) / 1000.0] + [0.0] * 767 # Dummy 768-dim vector
+    try:
+        # The result is a list of floats.
+        embedding = genai.embed_content(model=embedding_model, content=text, task_type="RETRIEVAL_DOCUMENT")
+        return embedding['embedding']
+    except Exception as e:
+        print(f"!!! ERROR during embedding: {e}")
+        # Return a zero-vector on failure
+        return [0.0] * 768
 
 def fetch_article_content(url: str) -> Dict[str, Any]:
     """Placeholder for a web scraping and content extraction service (e.g., using BeautifulSoup, Jina Reader)."""
@@ -32,28 +54,54 @@ def fetch_article_content(url: str) -> Dict[str, Any]:
 def extract_links(content: str, base_url: str) -> List[str]:
     """Placeholder for a hyperlink extraction utility."""
     print(f"--- Extracting links from content...")
-    # Dummy extraction for architectural purposes
-    # In reality, this would use regex or a library like BeautifulSoup.
     import re
-    # A very basic regex to find URLs
     urls = re.findall(r'https?://[^\s,"]+', content)
-    return urls[:2] # Limit branching factor for this example
+    return urls[:2] # Limit branching factor
 
 def calculate_semantic_drift(vec1: List[float], vec2: List[float]) -> float:
-    """Placeholder for cosine similarity or other vector distance metric."""
-    # Dummy calculation
-    if not vec1 or not vec2:
+    """Calculates cosine similarity between two vectors."""
+    import numpy as np
+    if not isinstance(vec1, list) or not isinstance(vec2, list) or not vec1 or not vec2:
         return 0.0
-    drift = abs(vec1[0] - vec2[0])
+    vec1 = np.array(vec1)
+    vec2 = np.array(vec2)
+    similarity = np.dot(vec1, vec2) / (np.linalg.norm(vec1) * np.linalg.norm(vec2))
+    # We want drift, which is 1 - similarity
+    drift = 1.0 - similarity
     print(f"--- Calculated semantic drift: {drift}")
     return drift
+
+def summarize_mutation(parent_content: str, child_content: str) -> str:
+    """Uses the LLM to generate a summary of the semantic difference."""
+    print("--- Generating mutation summary with LLM...")
+    try:
+        prompt = f"""
+        Analyze the semantic difference between the two following texts.
+        PARENT TEXT:
+        ---
+        {parent_content[:2000]}
+        ---
+
+        CHILD TEXT:
+        ---
+        {child_content[:2000]}
+        ---
+
+        Concisely describe the mutation or change in narrative, tone, or key information.
+        Focus on what makes the CHILD TEXT different from the PARENT TEXT.
+        """
+        response = llm.generate_content(prompt)
+        return response.text
+    except Exception as e:
+        print(f"!!! ERROR during LLM summary generation: {e}")
+        return "LLM summary failed."
+
 
 # --- Graph Node Definitions ---
 
 def node_acquire(state: "GraphState") -> Dict[str, Any]:
     """
     Acquires the next article from the traversal queue.
-    This is the entry point for each recursive step.
     """
     print(">>> In Node: Acquire")
     queue = state["traversal_queue"]
@@ -66,6 +114,7 @@ def node_acquire(state: "GraphState") -> Dict[str, Any]:
         "traversal_queue": queue,
         "current_article": article_data,
         "parent_article_id": parent_id,
+        "current_depth": depth,
         "knowledge_graph": {
             "nodes": {article_data["id"]: article_data},
             "edges": []
@@ -74,29 +123,31 @@ def node_acquire(state: "GraphState") -> Dict[str, Any]:
 
 def node_sequence(state: "GraphState") -> Dict[str, Any]:
     """
-    The "brain" of the operation. Compares the current article to its parent
-    to detect semantic mutations.
+    Compares the current article to its parent to detect semantic mutations.
     """
     print(">>> In Node: Sequence")
     current_article = state["current_article"]
     parent_id = state["parent_article_id"]
     knowledge_graph = state["knowledge_graph"]
+    summary = "Initial article."
 
-    if not current_article or not parent_id:
-        # This is "Patient Zero", it has no parent to compare against.
-        # Its relationship is to the global context.
+    if not current_article:
+        return {}
+
+    if not parent_id:
+        # "Patient Zero" comparison to global context
         drift_score = calculate_semantic_drift(state["global_context"], current_article["embedding"])
         parent_id = "GLOBAL_CONTEXT"
     else:
         parent_article = knowledge_graph["nodes"].get(parent_id)
         if not parent_article:
-            # Should not happen in a well-formed graph
             print(f"!!! ERROR: Parent article {parent_id} not found in knowledge graph.")
             return {}
         drift_score = calculate_semantic_drift(parent_article["embedding"], current_article["embedding"])
+        summary = summarize_mutation(parent_article["content"], current_article["content"])
 
     # Define mutation threshold
-    MUTATION_THRESHOLD = 0.1 # Dummy value
+    MUTATION_THRESHOLD = 0.3 # Adjusted for real embeddings
 
     relation_type = "Mutation" if drift_score > MUTATION_THRESHOLD else "Replication"
     print(f"--- Relation to parent: {relation_type} (Score: {drift_score})")
@@ -107,7 +158,7 @@ def node_sequence(state: "GraphState") -> Dict[str, Any]:
         "attributes": {
             "mutation_score": drift_score,
             "relation_type": relation_type,
-            "summary": f"Drift of {drift_score:.2f} detected." # In reality, an LLM would generate this.
+            "summary": summary
         }
     }
 
@@ -120,45 +171,20 @@ def node_sequence(state: "GraphState") -> Dict[str, Any]:
 
 def node_branch(state: "GraphState") -> Dict[str, Any]:
     """
-    Extracts new, valid hyperlinks from the current article to continue
-    the recursive traversal.
+    Extracts new hyperlinks to continue the traversal.
     """
     print(">>> In Node: Branch")
     current_article = state["current_article"]
-    queue = state["traversal_queue"]
-    
-    # Find the depth of the current article to calculate child depth
-    # This is a bit clunky and could be improved by passing depth more directly
-    current_depth = 0
-    # This is a simplified way to get the depth. A more robust solution might pass
-    # the current depth within the state explicitly.
-    if state.get('parent_article_id'):
-        # A real system would need a more reliable way to track depth.
-        # For this scaffold, we assume depth increases by 1 from parent.
-        # This part of the logic is complex to get right without a proper
-        # state flow for depth, so we'll approximate.
-        # Let's assume the depth was passed correctly in the queue tuple.
-        # The 'traversal_queue_history' is a hack to reconstruct this.
-        pass
+    current_depth = state.get("current_depth", 0)
 
-
-    if state.get("current_depth", 0) >= state["max_depth"]:
-        print("--- Max depth reached. Halting branching from this node.")
-        return {}
+    if current_depth >= state["max_depth"]:
+        print(f"--- Max depth ({state['max_depth']}) reached. Halting branching.")
+        return {"traversal_queue": []}
 
     new_links = extract_links(current_article["content"], current_article["id"])
     print(f"--- Found {len(new_links)} new links to explore.")
     
-    # Add new links to the queue for the next level of traversal
-    # The depth of these new links is the current article's depth + 1.
-    # This requires knowing the current depth accurately.
-    # Let's assume the depth is part of the state that gets passed around.
-    # The tuple in traversal_queue is (url, parent_id, depth).
-    # The 'acquire' node pops it, but we need to track it.
-    
-    # This is a simplification. A robust implementation would manage depth more explicitly.
-    # For now, we'll assume a depth of 1 for any children found.
-    new_depth = state.get("current_depth", 0) + 1
+    new_depth = current_depth + 1
     next_level_queue = [(link, current_article["id"], new_depth) for link in new_links]
 
     return {
@@ -173,36 +199,33 @@ def should_continue(state: "GraphState") -> str:
     Determines whether to continue the traversal or end.
     """
     print(">>> In Control Node: Should Continue?")
-    if state["traversal_queue"]:
-        # We also need to check the depth constraint of the items in the queue
-        next_url, _, next_depth = state["traversal_queue"][0]
-        if next_depth > state["max_depth"]:
-            print(f"--- Next item in queue (depth {next_depth}) exceeds max depth ({state['max_depth']}). Ending.")
-            return END
-        print("--- Queue is not empty and depth is within limits. Continuing.")
-        return "acquire"
-    else:
+    if not state["traversal_queue"]:
         print("--- Queue is empty. Ending graph traversal.")
         return END
+    
+    # Check depth of the *next* item without removing it
+    _, _, next_depth = state["traversal_queue"][0]
+    if next_depth > state["max_depth"]:
+        print(f"--- Next item in queue (depth {next_depth}) exceeds max depth ({state['max_depth']}). Ending.")
+        return END
+        
+    print("--- Queue is not empty and depth is within limits. Continuing.")
+    return "acquire"
 
 # --- Graph Assembly ---
 
 from state import GraphState
 
-# The global state reducer graph
 workflow = StateGraph(GraphState)
 
-# Add the nodes
 workflow.add_node("acquire", node_acquire)
 workflow.add_node("sequence", node_sequence)
 workflow.add_node("branch", node_branch)
 
-# Define the edges
 workflow.set_entry_point("acquire")
 workflow.add_edge("acquire", "sequence")
 workflow.add_edge("sequence", "branch")
 
-# Add the conditional edge for recursion
 workflow.add_conditional_edges(
     "branch",
     should_continue,
@@ -212,12 +235,10 @@ workflow.add_conditional_edges(
     }
 )
 
-# Compile the state machine
 app = workflow.compile()
 
 # For debugging: visualize the graph
 try:
-    # The `get_graph` method returns a `Graph` object that can be drawn
     graph_image = app.get_graph().draw_mermaid_png()
     with open("/home/abtin/Phylos/graph_visualization.png", "wb") as f:
         f.write(graph_image)
