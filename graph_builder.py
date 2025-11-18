@@ -36,6 +36,7 @@ else:
     llm = None
 
 embedding_model = "models/embedding-001"
+GRAPH_RECURSION_LIMIT = int(os.getenv("PHYLOS_RECURSION_LIMIT", "500"))
 _executor = ThreadPoolExecutor(max_workers=2)
 _gemini_embeddings_available = USE_GEMINI
 _gemini_summaries_available = USE_GEMINI

@@ -9,7 +9,7 @@ from fastapi.responses import HTMLResponse
 
 # --- Local Imports ---
 from state import GraphState, InitialArticleRequest
-from graph_builder import app, embedder, fetch_article_content
+from graph_builder import app, embedder, fetch_article_content, GRAPH_RECURSION_LIMIT
 
 # --- FastAPI App Initialization ---
 api = FastAPI(
@@ -624,7 +624,7 @@ async def websocket_endpoint(websocket: WebSocket):
         }
 
         # 3. Stream the graph execution events back to the client
-        async for event in app.astream_events(initial_state, version="v1"):
+        async for event in app.astream_events(initial_state, version="v1", config={"recursion_limit": GRAPH_RECURSION_LIMIT}):
             await websocket.send_json({
                 "event": event["event"],
                 "name": event["name"],
