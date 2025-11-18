@@ -3,11 +3,14 @@
 # Provides a WebSocket endpoint so clients can stream traversal events.
 
 import os
+import uuid
+from typing import Dict, Any, List
 import json
 import logging
 import uvicorn
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException
 from fastapi.responses import HTMLResponse
+from pydantic import BaseModel
 
 # --- Logging Configuration ---
 LOG_LEVEL = os.getenv("PHYLOS_LOG_LEVEL", "INFO").upper()
@@ -63,7 +66,11 @@ def _summarize_event_data(data):
                 {
                     "source": edge.get("source"),
                     "target": edge.get("target"),
-                    "relation": edge.get("attributes", {}).get("relation_type"),
+                    "attributes": {
+                        "relation_type": edge.get("attributes", {}).get("relation_type"),
+                        "mutation_score": edge.get("attributes", {}).get("mutation_score"),
+                        "summary_preview": _shorten(edge.get("attributes", {}).get("summary", ""), MAX_STRING_LENGTH // 2),
+                    }
                 }
                 for edge in edges[:MAX_LIST_ITEMS]
             ],
@@ -111,9 +118,112 @@ def _sanitize_payload(value, depth=0):
 
     return str(value)
 
+class ChatRequest(BaseModel):
+    session_id: str
+    message: str
+
+def _create_session() -> tuple[str, Dict[str, Any]]:
+    session_id = str(uuid.uuid4())
+    SESSION_CONTEXTS[session_id] = {
+        "knowledge_graph": {"nodes": {}, "edges": []},
+        "summary": None,
+        "history": [],
+    }
+    return session_id, SESSION_CONTEXTS[session_id]
+
+def _gather_graphs(obj, acc, depth=0, max_depth=4):
+    if depth > max_depth or obj is None:
+        return
+    if isinstance(obj, dict):
+        if "nodes" in obj and "edges" in obj:
+            acc.append(obj)
+        for value in obj.values():
+            _gather_graphs(value, acc, depth + 1, max_depth)
+    elif isinstance(obj, list):
+        for item in obj:
+            _gather_graphs(item, acc, depth + 1, max_depth)
+
+def _accumulate_graph(accumulator: Dict[str, Any], data: Dict[str, Any] | None):
+    if not data:
+        return
+    graphs: List[Dict[str, Any]] = []
+    _gather_graphs(data, graphs)
+    for graph in graphs:
+        nodes = graph.get("nodes") or {}
+        if isinstance(nodes, dict):
+            accumulator["nodes"].update(nodes)
+        edges = graph.get("edges") or []
+        if isinstance(edges, list):
+            accumulator["edges"].extend(edges)
+
+def _generate_graph_summary(graph: Dict[str, Any]) -> str:
+    node_count = len(graph.get("nodes", {}))
+    edge_count = len(graph.get("edges", []))
+    sample_edges = [
+        {
+            "source": edge.get("source"),
+            "target": edge.get("target"),
+            "relation": edge.get("attributes", {}).get("relation_type"),
+            "score": edge.get("attributes", {}).get("mutation_score"),
+        }
+        for edge in graph.get("edges", [])[:5]
+    ]
+    fallback = (
+        f"The trace built a narrative graph with {node_count} nodes and {edge_count} relationships. "
+        f"Representative edges: {sample_edges}."
+    )
+    prompt = f"""
+    You are Gemini. Provide a concise but insightful summary of a narrative trace.
+    Node count: {node_count}
+    Edge count: {edge_count}
+    Representative edges (source -> target, relation, score):
+    {json.dumps(sample_edges, indent=2)}
+
+    Describe overall findings in 2 short paragraphs and highlight potential mutation hotspots.
+    """
+    return generate_text_response(prompt, fallback)
+
+def _generate_chat_reply(summary: str, history: List[Dict[str, str]], question: str) -> str:
+    fallback = (
+        "Based on the trace summary, the narrative shifts around the listed mutation edges. "
+        "Consider reviewing those sources for more context."
+    )
+    history_text = "\n".join(f"{item['role']}: {item['content']}" for item in history[-6:])
+    prompt = f"""
+    You are Gemini acting as an investigative analyst. Use the summary below to answer follow-up questions.
+    SUMMARY:
+    {summary}
+
+    CHAT HISTORY:
+    {history_text}
+
+    USER QUESTION:
+    {question}
+
+    Respond concisely (<=120 words) and suggest next investigative steps when useful.
+    """
+    return generate_text_response(prompt, fallback)
+
+@api.post("/chat")
+async def chat_endpoint(request: ChatRequest):
+    context = SESSION_CONTEXTS.get(request.session_id)
+    if not context:
+        raise HTTPException(status_code=404, detail="Session not found. Run a trace first.")
+    if not context.get("summary"):
+        raise HTTPException(status_code=400, detail="Summary not ready yet. Please wait for the trace to finish.")
+
+    history: List[Dict[str, str]] = context.setdefault("history", [])
+    history.append({"role": "user", "content": request.message})
+    reply = _generate_chat_reply(context["summary"], history, request.message)
+    history.append({"role": "assistant", "content": reply})
+    return {"reply": reply}
+
 # --- Local Imports ---
 from state import GraphState, InitialArticleRequest
-from graph_builder import app, embedder, fetch_article_content, GRAPH_RECURSION_LIMIT
+from graph_builder import app, embedder, fetch_article_content, GRAPH_RECURSION_LIMIT, generate_text_response
+
+# --- Session Storage ---
+SESSION_CONTEXTS: Dict[str, Dict[str, Any]] = {}
 
 # --- FastAPI App Initialization ---
 api = FastAPI(
@@ -310,6 +420,43 @@ HTML = """
         .log-entry small {
             color: #7f93b1;
         }
+        .summary-box {
+            padding: 12px;
+            border-radius: 12px;
+            background: rgba(255, 255, 255, 0.04);
+            margin-top: 10px;
+            min-height: 90px;
+            white-space: pre-wrap;
+        }
+        .chat-panel {
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+        }
+        .chat-messages {
+            max-height: 220px;
+            overflow-y: auto;
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+        .chat-entry {
+            padding: 8px 10px;
+            border-radius: 10px;
+            background: rgba(255, 255, 255, 0.03);
+            border: 1px solid rgba(255, 255, 255, 0.05);
+        }
+        .chat-entry strong {
+            display: block;
+            margin-bottom: 4px;
+            color: #9ad5ff;
+        }
+        .chat-entry.assistant strong {
+            color: #ff86d6;
+        }
+        .chat-entry.system strong {
+            color: #ffd27f;
+        }
         pre {
             margin: 0;
             margin-top: 8px;
@@ -338,6 +485,16 @@ HTML = """
         .queue-item span {
             display: block;
             font-size: 0.85rem;
+        }
+        #chat-input {
+            width: 100%;
+            min-height: 70px;
+            border-radius: 10px;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            background: rgba(255, 255, 255, 0.05);
+            color: #f6f8fb;
+            padding: 10px;
+            font-size: 0.95rem;
         }
         .empty {
             color: #7689a3;
@@ -426,6 +583,22 @@ HTML = """
                 <div class="empty">No events yet - start a trace to watch the stream.</div>
             </div>
         </section>
+        <section class="panel">
+            <h3>Gemini Debrief & Chat</h3>
+            <p class="hint">Summary appears after each trace. Use the chat to debate or ask follow-ups.</p>
+            <div id="summary-text" class="summary-box">Run a trace to see Gemini's findings.</div>
+            <div class="chat-panel">
+                <div id="chat-messages" class="chat-messages">
+                    <div class="empty">Chat unlocks once a summary is ready.</div>
+                </div>
+                <form id="chat-form">
+                    <textarea id="chat-input" placeholder="Ask Gemini about this narrative..." disabled></textarea>
+                    <div class="controls">
+                        <button type="submit" class="secondary" id="chat-send" disabled>Ask Gemini</button>
+                    </div>
+                </form>
+            </div>
+        </section>
     </div>
 
     <script>
@@ -446,6 +619,11 @@ HTML = """
             const statNodes = document.getElementById('stat-nodes');
             const statMutations = document.getElementById('stat-mutations');
             const statReplications = document.getElementById('stat-replications');
+            const summaryBox = document.getElementById('summary-text');
+            const chatMessages = document.getElementById('chat-messages');
+            const chatForm = document.getElementById('chat-form');
+            const chatInput = document.getElementById('chat-input');
+            const chatSend = document.getElementById('chat-send');
 
             let ws = null;
             let stats = { events: 0, nodes: 0, mutations: 0, replications: 0 };
@@ -454,6 +632,8 @@ HTML = """
             let manualEndpointSupplied = false;
             let attemptedFallback = false;
             let activePayload = null;
+            let currentSessionId = null;
+            let summaryReady = false;
 
             function computeDefaultEndpoint() {
                 const baseProtocol = window.location.protocol === 'https:' ? 'wss' : 'ws';
@@ -497,6 +677,13 @@ HTML = """
                 statMutations.textContent = stats.mutations;
                 statReplications.textContent = stats.replications;
             }
+
+            function setChatEnabled(enabled) {
+                chatInput.disabled = !enabled;
+                chatSend.disabled = !enabled;
+            }
+
+            setChatEnabled(false);
 
             function renderQueue(queue) {
                 queueList.innerHTML = '';
@@ -550,7 +737,37 @@ HTML = """
                 }
             }
 
+            function appendChatMessage(author, text, type = 'user') {
+                if (chatMessages.querySelector('.empty')) {
+                    chatMessages.innerHTML = '';
+                }
+                const entry = document.createElement('div');
+                entry.className = `chat-entry ${type}`;
+                entry.innerHTML = `<strong>${author}</strong><p>${text}</p>`;
+                chatMessages.appendChild(entry);
+                chatMessages.scrollTop = chatMessages.scrollHeight;
+            }
+
             function handleIncoming(message) {
+                if (message.status) {
+                    if (message.status === 'session') {
+                        currentSessionId = message.session_id;
+                        addLogEntry('system', 'Session established', `Chat session ${currentSessionId.slice(0, 8)}…`);
+                        return;
+                    }
+                    if (message.status === 'summary') {
+                        summaryReady = true;
+                        summaryBox.textContent = message.summary;
+                        setChatEnabled(true);
+                        appendChatMessage('Gemini', 'Summary updated. Ask about any part of the trace.', 'assistant');
+                        addLogEntry('system', 'Gemini summary ready', message.summary);
+                        return;
+                    }
+                    const kind = message.status === 'error' ? 'error' : 'system';
+                    addLogEntry(kind, message.message || message.status, message);
+                    return;
+                }
+
                 stats.events += 1;
                 const data = message.data || {};
 
@@ -662,6 +879,11 @@ HTML = """
 
                 payloadPreview.textContent = JSON.stringify(payload, null, 2);
                 resetStats();
+                summaryReady = false;
+                summaryBox.textContent = 'Trace running... summary will appear here.';
+                setChatEnabled(false);
+                chatMessages.innerHTML = '<div class="empty">Waiting for Gemini summary...</div>';
+                currentSessionId = null;
 
                 const targetEndpoint = wsInput.value.trim() || computeDefaultEndpoint();
                 addLogEntry('system', 'Connecting to agent', { ...payload, endpoint: targetEndpoint });
@@ -689,6 +911,34 @@ HTML = """
             form.addEventListener('submit', startTrace);
             stopBtn.addEventListener('click', stopTrace);
             clearBtn.addEventListener('click', clearLog);
+            chatForm.addEventListener('submit', async function(evt) {
+                evt.preventDefault();
+                const message = chatInput.value.trim();
+                if (!message) {
+                    return;
+                }
+                if (!currentSessionId || !summaryReady) {
+                    appendChatMessage('System', 'Chat is unavailable until a trace finishes.', 'system');
+                    return;
+                }
+                appendChatMessage('You', message, 'user');
+                chatInput.value = '';
+                try {
+                    const response = await fetch('/chat', {
+                        method: 'POST',
+                        headers: {'Content-Type': 'application/json'},
+                        body: JSON.stringify({session_id: currentSessionId, message}),
+                    });
+                    const data = await response.json();
+                    if (!response.ok) {
+                        appendChatMessage('System', data.detail || 'Chat request failed.', 'system');
+                        return;
+                    }
+                    appendChatMessage('Gemini', data.reply || 'No response.', 'assistant');
+                } catch (error) {
+                    appendChatMessage('System', 'Unable to reach chat endpoint.', 'system');
+                }
+            });
         })();
     </script>
 </body>
@@ -708,6 +958,8 @@ async def websocket_endpoint(websocket: WebSocket):
     """
     logger.info("WebSocket connection attempt from %s", websocket.client)
     await websocket.accept()
+    session_id, session_context = _create_session()
+    await websocket.send_json({"status": "session", "session_id": session_id})
     try:
         # 1. Receive the initial request from the client
         initial_data = await websocket.receive_json()
@@ -742,6 +994,8 @@ async def websocket_endpoint(websocket: WebSocket):
             version="v1",
             config={"recursion_limit": GRAPH_RECURSION_LIMIT},
         ):
+            raw_data = event.get("data")
+            _accumulate_graph(session_context["knowledge_graph"], raw_data)
             event_keys = list((event.get("data") or {}).keys())
             logger.debug(
                 "Streaming event: event=%s name=%s data_keys=%s",
@@ -759,6 +1013,14 @@ async def websocket_endpoint(websocket: WebSocket):
         
         await websocket.send_json({"status": "info", "message": "Graph traversal complete."})
         logger.info("WebSocket trace completed successfully for %s", request.start_url)
+        summary_text = _generate_graph_summary(session_context["knowledge_graph"])
+        session_context["summary"] = summary_text
+        await websocket.send_json({
+            "status": "summary",
+            "session_id": session_id,
+            "summary": summary_text,
+        })
+        logger.info("Graph summary ready for session %s", session_id)
 
     except WebSocketDisconnect:
         logger.warning("Client disconnected prematurely.")

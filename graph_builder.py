@@ -126,11 +126,7 @@ def calculate_semantic_drift(vec1: List[float], vec2: List[float]) -> float:
 
 def summarize_mutation(parent_content: str, child_content: str) -> str:
     """Uses the LLM to generate a summary of the semantic difference."""
-    global _gemini_summaries_available
-    if not _gemini_summaries_available or llm is None:
-        return _stub_summary(parent_content, child_content)
-
-    logger.info("Generating mutation summary with LLM.")
+    fallback = _stub_summary(parent_content, child_content)
     prompt = f"""
     Analyze the semantic difference between the two following texts.
     PARENT TEXT:
@@ -147,6 +143,14 @@ def summarize_mutation(parent_content: str, child_content: str) -> str:
     Focus on what makes the CHILD TEXT different from the PARENT TEXT.
     """
 
+    return generate_text_response(prompt, fallback)
+
+def generate_text_response(prompt: str, fallback: str) -> str:
+    """Generic helper to request text from the LLM with graceful fallback."""
+    global _gemini_summaries_available
+    if llm is None or not _gemini_summaries_available:
+        return fallback
+
     def _call():
         return llm.generate_content(prompt)
 
@@ -154,9 +158,9 @@ def summarize_mutation(parent_content: str, child_content: str) -> str:
         response = _executor.submit(_call).result(timeout=REQUEST_TIMEOUT)
         return response.text
     except (TimeoutError, Exception) as e:
-        logger.warning("LLM summary generation failed (%s). Falling back to offline summary.", e)
+        logger.warning("LLM text generation failed (%s). Falling back to stub.", e)
         _gemini_summaries_available = False
-        return _stub_summary(parent_content, child_content)
+        return fallback
 
 
 # --- Graph Node Definitions ---
