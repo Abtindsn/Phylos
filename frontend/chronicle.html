@@ -90,6 +90,16 @@
       (function () {
         try {
       const { useState, useEffect, useRef } = React;
+      const originalCreateElement = React.createElement;
+      React.createElement = function patchedCreateElement(type, ...rest) {
+        const typeOf = typeof type;
+        const isAcceptable = typeOf === 'string' || typeOf === 'function' || typeOf === 'symbol';
+        if (!isAcceptable) {
+          console.error('Invalid React element type encountered:', type);
+          throw new Error(`Invalid React element type: ${typeOf}`);
+        }
+        return originalCreateElement.apply(React, [type, ...rest]);
+      };
 
       function createHtmlRenderer(createElement) {
         const PLACE_PREFIX = "__HTMEXP__";
