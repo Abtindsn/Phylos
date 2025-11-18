@@ -292,7 +292,16 @@
           if (!node) {
             return null;
           }
-          const args = [node.type, node.props];
+          const tag = node.type;
+          const isValidTag =
+            typeof tag === "string" ||
+            typeof tag === "function" ||
+            (typeof tag === "symbol");
+          if (!isValidTag) {
+            console.error("Invalid element type detected in template:", tag);
+            throw new Error("Unsupported element type in template");
+          }
+          const args = [tag, node.props];
           if (node.children.length) {
             node.children.forEach((child) => args.push(child));
           }
