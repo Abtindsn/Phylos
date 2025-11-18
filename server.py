@@ -74,7 +74,7 @@ HTML = """
         </script>
     </body>
 </html>
-"
+"""
 
 @api.get("/")
 async def get():
