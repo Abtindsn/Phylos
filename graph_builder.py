@@ -15,6 +15,11 @@ from typing import Dict, Any, List
 import google.generativeai as genai
 from dotenv import load_dotenv
 import logging
+from datetime import datetime, timezone
+from urllib.parse import urljoin
+
+import requests
+from bs4 import BeautifulSoup
 
 # --- API and Model Configuration ---
 load_dotenv()
@@ -22,6 +27,12 @@ GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 OFFLINE_MODE = os.getenv("PHYLOS_OFFLINE_MODE", os.getenv("PHYLOS_OFFLINE", "auto")).lower()
 FORCE_OFFLINE = OFFLINE_MODE in {"1", "true", "yes", "on", "offline", "stub"}
 REQUEST_TIMEOUT = float(os.getenv("PHYLOS_GEMINI_TIMEOUT", "8"))
+HTTP_HEADERS = {
+    "User-Agent": os.getenv(
+        "PHYLOS_HTTP_USER_AGENT",
+        "PhylosCrawler/1.0 (+https://github.com/abtin/Phylos)"
+    )
+}
 
 logger = logging.getLogger("phylos.graph")
 
@@ -44,6 +55,9 @@ _executor = ThreadPoolExecutor(max_workers=2)
 _gemini_embeddings_available = USE_GEMINI
 _gemini_text_available = USE_GEMINI
 STUB_EMBED_DIM = 128
+
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
 
 # --- Core Utilities ---
 
@@ -94,14 +108,82 @@ def embedder(text: str) -> List[float]:
         return _stub_embedding(text)
 
 def fetch_article_content(url: str) -> Dict[str, Any]:
-    """Placeholder for a web scraping and content extraction service (e.g., using BeautifulSoup, Jina Reader)."""
+    """Fetches an article body from the public web with a graceful offline fallback."""
     logger.info("Fetching content from URL: %s", url)
-    # Dummy content for architectural purposes
+
+    def _stub():
+        random_tail = uuid.uuid4()
+        return {
+            "id": url,
+            "content": (
+                f"This is the simulated content for the article at {url}. "
+                f"It mentions another article: http://example.com/{random_tail}"
+            ),
+            "author": "Unknown",
+            "timestamp": _now_iso(),
+        }
+
+    if FORCE_OFFLINE:
+        return _stub()
+
+    try:
+        response = requests.get(url, headers=HTTP_HEADERS, timeout=REQUEST_TIMEOUT, allow_redirects=True)
+        response.raise_for_status()
+    except Exception as exc:
+        logger.warning("Failed to fetch %s (%s). Falling back to stub.", url, exc)
+        return _stub()
+
+    soup = BeautifulSoup(response.text, "html.parser")
+    for tag in soup(["script", "style", "noscript", "svg", "form", "header", "footer", "nav"]):
+        tag.decompose()
+
+    paragraphs = [
+        p.get_text(" ", strip=True)
+        for p in soup.find_all("p")
+        if p.get_text(strip=True)
+    ]
+    content = "\n\n".join(paragraphs) or soup.get_text(" ", strip=True)
+    content = content.strip()
+    if not content:
+        logger.warning("No readable text extracted from %s. Using stub.", url)
+        return _stub()
+
+    title = soup.title.string.strip() if soup.title and soup.title.string else url
+
+    def _meta_content(keys):
+        for attr in ("name", "property"):
+            for key in keys:
+                tag = soup.find("meta", attrs={attr: key})
+                if tag and tag.get("content"):
+                    return tag["content"].strip()
+        return None
+
+    author = _meta_content(["author", "article:author", "og:author"]) or "Unknown"
+    published = _meta_content(["article:published_time", "og:published_time"]) or response.headers.get("Date")
+    if published:
+        try:
+            published = datetime.fromisoformat(published.replace("Z", "+00:00")).astimezone(timezone.utc).isoformat()
+        except Exception:
+            published = _now_iso()
+    else:
+        published = _now_iso()
+
+    # Collect outbound links and append to the text so regex-based extraction can discover them.
+    outbound_links: List[str] = []
+    for anchor in soup.find_all("a", href=True):
+        absolute = urljoin(url, anchor["href"].strip())
+        if absolute.startswith("http"):
+            outbound_links.append(absolute)
+
+    if outbound_links:
+        preview = "\n".join(outbound_links[:10])
+        content = f"{content}\n\nReferenced URLs:\n{preview}"
+
     return {
         "id": url,
-        "content": f"This is the simulated content for the article at {url}. It mentions another article: http://example.com/{uuid.uuid4()}",
-        "author": "Author Name",
-        "timestamp": "2025-11-18T12:00:00Z",
+        "content": f"{title}\n\n{content}",
+        "author": author,
+        "timestamp": published,
     }
 
 def extract_links(content: str, base_url: str) -> List[str]:

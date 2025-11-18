@@ -52,7 +52,14 @@ This guide provides a complete, copy-paste-friendly set of commands to get the a
     ```env
     # .env
     GEMINI_API_KEY="PASTE_YOUR_GEMINI_API_KEY_HERE"
+    PHYLOS_OFFLINE_MODE=0   # keep at 0 to fetch real-world sites
     ```
+
+    > **Important:** Setting `PHYLOS_OFFLINE_MODE=1` forces the crawler to use stubbed
+    > `example.com` content. Leave it at `0` (or remove it entirely) whenever you want
+    > to analyze live news sources such as CNN, Fox News, etc. Because the server runs
+    > inside Docker, make sure the container has outbound network access so the HTTP
+    > fetcher can reach those sites.
 
 3.  **Build and Run the Docker Container**
 
@@ -61,6 +68,13 @@ This guide provides a complete, copy-paste-friendly set of commands to get the a
     ```bash
     docker build -t phylos-app . && docker run --env-file .env -p 8000:8000 phylos-app
     ```
+
+    > ⚠️ **Real-web crawling vs. stub mode**
+    >
+    > The command above uses whatever value you placed in `.env`. Do **not** add
+    > `-e PHYLOS_OFFLINE_MODE=1` unless you explicitly want the offline stubs (the
+    > ones that emit `http://example.com/...`). When the variable is `0`, Phylos will
+    > fetch the actual article content and outbound links from the live site.
 
     The FastAPI server will now be running and accessible at `http://localhost:8000`. You can connect to the WebSocket at `ws://localhost:8000/ws/dna-stream`.
 

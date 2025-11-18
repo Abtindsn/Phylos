@@ -4,6 +4,7 @@ pydantic
 numpy
 aiohttp
 beautifulsoup4
+requests
 uvicorn
 python-dotenv
 google-generativeai
