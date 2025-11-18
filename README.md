@@ -21,26 +21,48 @@ This project is a backend service designed to trace the evolution of a narrative
 
 ## Getting Started
 
+This guide provides a complete, copy-paste-friendly set of commands to get the agent running locally.
+
 ### Prerequisites
 
-- Docker
-- Python 3.10+
+-   **Git**: To clone the repository.
+-   **Docker**: To build and run the application container.
+-   **Gemini API Key**: You need an active API key from Google AI Studio.
 
-### Installation and Running
+### Setup & Run
 
-1.  **Build the Docker image:**
-
-    ```bash
-    docker build -t phylos-app .
-    ```
-
-2.  **Run the Docker container:**
+1.  **Clone the Repository**
 
     ```bash
-    docker run -p 8000:8000 phylos-app
+    git clone https://github.com/your-repo/phylos.git
+    cd phylos
+    ```
+    *(Note: Replace `your-repo/phylos` with the actual repository path if you have one).*
+
+2.  **Configure Environment**
+
+    Create a `.env` file from the provided example. This file will securely store your API key.
+
+    ```bash
+    cp .env.example .env
     ```
 
-The FastAPI server will be available at `http://localhost:8000`.
+    Now, open the newly created `.env` file and paste your Gemini API key into it:
+
+    ```env
+    # .env
+    GEMINI_API_KEY="PASTE_YOUR_GEMINI_API_KEY_HERE"
+    ```
+
+3.  **Build and Run the Docker Container**
+
+    The following command builds the Docker image and runs the container in one step. It uses the `--env-file` flag to securely pass your API key to the application.
+
+    ```bash
+    docker build -t phylos-app . && docker run --env-file .env -p 8000:8000 phylos-app
+    ```
+
+    The FastAPI server will now be running and accessible at `http://localhost:8000`. You can connect to the WebSocket at `ws://localhost:8000/ws/dna-stream`.
 
 ## License
 
