@@ -86,326 +86,265 @@
   <body class="min-h-screen bg-gradient-to-b from-slate-900 via-blue-950 to-indigo-950 text-gray-100">
     <div id="root"></div>
 
-    <script>
-      (function () {
-        try {
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script type="text/babel" data-presets="react">
       const { useState, useEffect, useRef } = React;
-      const originalCreateElement = React.createElement;
-      React.createElement = function patchedCreateElement(type, ...rest) {
-        const typeOf = typeof type;
-        const isAcceptable = typeOf === 'string' || typeOf === 'function' || typeOf === 'symbol';
-        if (!isAcceptable) {
-          console.error('Invalid React element type encountered:', type);
-          let detail;
-          if (type && typeof type === 'object') {
-            try {
-              detail = JSON.stringify(type);
-            } catch (err) {
-              detail = Object.prototype.toString.call(type);
-            }
-          } else {
-            detail = String(type);
-          }
-          throw new Error(`Invalid React element type: ${detail}`);
-        }
-        return originalCreateElement.apply(React, [type, ...rest]);
-      };
 
-      function createHtmlRenderer(createElement) {
-        const PLACE_PREFIX = "__HTMEXP__";
-        const PLACE_SUFFIX = "__";
-        const PLACE_PREFIX_LEN = PLACE_PREFIX.length;
-        const PLACE_SUFFIX_LEN = PLACE_SUFFIX.length;
-
-        function isWhitespace(str) {
-          return !str || /^[\s\r\n\t]+$/.test(str);
-        }
-
-        function matchPlaceholder(source, index, values) {
-          if (source.slice(index, index + PLACE_PREFIX_LEN) !== PLACE_PREFIX) {
-            return null;
-          }
-          let cursor = index + PLACE_PREFIX_LEN;
-          let digits = "";
-          const limit = source.length;
-          while (cursor < limit) {
-            const maybeSuffix = source.slice(cursor, cursor + PLACE_SUFFIX_LEN);
-            if (maybeSuffix === PLACE_SUFFIX) {
-              if (!digits) {
-                return null;
-              }
-              const valueIndex = Number(digits);
-              if (!Number.isFinite(valueIndex) || valueIndex >= values.length) {
-                return null;
-              }
-              return {
-                value: values[valueIndex],
-                length: cursor + PLACE_SUFFIX_LEN - index,
-              };
-            }
-            const ch = source[cursor];
-            if (ch >= "0" && ch <= "9") {
-              digits += ch;
-              cursor += 1;
-            } else {
-              return null;
-            }
-          }
-          return null;
-        }
-
-        const REACT_ELEMENT_TYPE = typeof Symbol === "function" && Symbol.for ? Symbol.for("react.element") : null;
-
-        function isReactElement(value) {
-          return value && typeof value === "object" && value.$$typeof === REACT_ELEMENT_TYPE;
-        }
-
-        function appendChild(list, child) {
-          if (child === null || child === undefined || child === false) {
-            return;
-          }
-          if (Array.isArray(child)) {
-            child.forEach((entry) => appendChild(list, entry));
-            return;
-          }
-          if (typeof child === "object" && !isReactElement(child)) {
-            throw new Error("Unsupported template child: " + JSON.stringify(child));
-          }
-          list.push(child);
-        }
-
-        function appendText(list, text, values) {
-          if (!text) {
-            return;
-          }
-          let buffer = "";
-          let cursor = 0;
-          while (cursor < text.length) {
-            const match = matchPlaceholder(text, cursor, values);
-            if (match) {
-              if (!isWhitespace(buffer)) {
-                let normalized = buffer;
-                if (normalized.indexOf("\n") >= 0 || normalized.indexOf("\r") >= 0) {
-                  normalized = normalized.trim();
-                }
-                if (normalized) {
-                  appendChild(list, normalized);
-                }
-              }
-              buffer = "";
-              appendChild(list, match.value);
-              cursor += match.length;
-            } else {
-              buffer += text[cursor];
-              cursor += 1;
-            }
-          }
-          if (!isWhitespace(buffer)) {
-            let normalized = buffer;
-            if (normalized.indexOf("\n") >= 0 || normalized.indexOf("\r") >= 0) {
-              normalized = normalized.trim();
-            }
-            if (normalized) {
-              appendChild(list, normalized);
-            }
-          }
-        }
-
-        function skipWhitespace(str, index) {
-          let cursor = index;
-          while (cursor < str.length && /\s/.test(str[cursor])) {
-            cursor += 1;
-          }
-          return cursor;
-        }
-
-        function readTagName(str, index, values) {
-          let cursor = skipWhitespace(str, index);
-          if (cursor >= str.length) {
-            return { name: "div", next: cursor };
-          }
-          const dynamic = matchPlaceholder(str, cursor, values);
-          if (dynamic) {
-            return { name: dynamic.value, next: cursor + dynamic.length };
-          }
-          let start = cursor;
-          while (cursor < str.length && /[A-Za-z0-9:_-]/.test(str[cursor])) {
-            cursor += 1;
-          }
-          const name = str.slice(start, cursor) || "div";
-          return { name, next: cursor };
-        }
-
-        function readAttribute(str, index, values) {
-          let cursor = index;
-          cursor = skipWhitespace(str, cursor);
-          const start = cursor;
-          while (cursor < str.length && !/[\s=/>]/.test(str[cursor])) {
-            cursor += 1;
-          }
-          const name = str.slice(start, cursor);
-          cursor = skipWhitespace(str, cursor);
-          let value = true;
-          if (str[cursor] === "=") {
-            cursor += 1;
-            cursor = skipWhitespace(str, cursor);
-            if (str[cursor] === '"') {
-              cursor += 1;
-              let literal = "";
-              while (cursor < str.length && str[cursor] !== '"') {
-                const match = matchPlaceholder(str, cursor, values);
-                if (match) {
-                  literal += match.value !== undefined ? String(match.value) : "";
-                  cursor += match.length;
-                } else {
-                  literal += str[cursor];
-                  cursor += 1;
-                }
-              }
-              cursor += 1;
-              value = literal;
-            } else {
-              const match = matchPlaceholder(str, cursor, values);
-              if (match) {
-                value = match.value;
-                cursor += match.length;
-              } else {
-                const startValue = cursor;
-                while (cursor < str.length && !/[\s/>]/.test(str[cursor])) {
-                  cursor += 1;
-                }
-                value = str.slice(startValue, cursor);
-              }
-            }
-          }
-          return { name, value, next: cursor };
-        }
-
-        function readAttributes(str, index, node, values) {
-          let cursor = index;
-          let selfClosing = false;
-          while (cursor < str.length) {
-            cursor = skipWhitespace(str, cursor);
-            if (cursor >= str.length) {
-              break;
-            }
-            const current = str[cursor];
-            if (current === ">") {
-              cursor += 1;
-              break;
-            }
-            if (current === "/" && str[cursor + 1] === ">") {
-              cursor += 2;
-              selfClosing = true;
-              break;
-            }
-            const attribute = readAttribute(str, cursor, values);
-            cursor = attribute.next;
-            if (attribute.name) {
-              node.props[attribute.name] = attribute.value;
-            }
-          }
-          return { next: cursor, selfClosing };
-        }
-
-        function createElementFromNode(node) {
-          if (!node) {
-            return null;
-          }
-          const tag = node.type;
-          const isValidTag =
-            typeof tag === "string" ||
-            typeof tag === "function" ||
-            (typeof tag === "symbol");
-          if (!isValidTag) {
-            console.error("Invalid element type detected in template:", tag);
-            throw new Error("Unsupported element type in template");
-          }
-          const args = [tag, node.props];
-          if (node.children.length) {
-            node.children.forEach((child) => args.push(child));
-          }
-          return createElement.apply(null, args);
-        }
-
-        function parseMarkup(source, values) {
-          const root = { children: [] };
-          const stack = [root];
-          let cursor = 0;
-          while (cursor < source.length) {
-            const current = source[cursor];
-            if (current === "<") {
-              if (source[cursor + 1] === "/") {
-                cursor += 2;
-                while (cursor < source.length && source[cursor] !== ">") {
-                  const skip = matchPlaceholder(source, cursor, values);
-                  if (skip) {
-                    cursor += skip.length;
-                  } else {
-                    cursor += 1;
-                  }
-                }
-                cursor += 1;
-                const node = stack.pop();
-                if (!node) {
-                  throw new Error("Malformed template markup");
-                }
-                const parent = stack[stack.length - 1];
-                appendChild(parent.children, createElementFromNode(node));
-              } else {
-                cursor += 1;
-                const { name, next } = readTagName(source, cursor, values);
-                cursor = next;
-                const node = { type: name, props: {}, children: [] };
-                const attrState = readAttributes(source, cursor, node, values);
-                cursor = attrState.next;
-                if (attrState.selfClosing) {
-                  const parent = stack[stack.length - 1];
-                  appendChild(parent.children, createElementFromNode(node));
-                } else {
-                  stack.push(node);
-                }
-              }
-            } else {
-              const start = cursor;
-              while (cursor < source.length && source[cursor] !== "<") {
-                cursor += 1;
-              }
-              const textSegment = source.slice(start, cursor);
-              appendText(stack[stack.length - 1].children, textSegment, values);
-            }
-          }
-          if (stack.length !== 1) {
-            throw new Error("Unbalanced template detected");
-          }
-          return root.children;
-        }
-
-        return function html(strings, ...values) {
-          let markup = "";
-          for (let index = 0; index < strings.length; index += 1) {
-            markup += strings[index];
-            if (index < values.length) {
-              markup += PLACE_PREFIX + index + PLACE_SUFFIX;
-            }
-          }
-          const children = parseMarkup(markup, values);
-          if (children.length === 1) {
-            return children[0];
-          }
-          return createElement.apply(null, ["div", null].concat(children));
-        };
-      }
-
-      const html = createHtmlRenderer(React.createElement);
       const iconSlug = (name) =>
         name
           .replace(/([a-z0-9])([A-Z])/g, '$1-$2')
           .replace(/([A-Za-z])(\d+)/g, '$1-$2')
           .toLowerCase();
 
-      const iconElement = (name, className) =>
-        React.createElement('i', { 'data-lucide': iconSlug(name), className });
+      const LucideIcon = ({ name, className }) => (
+        <i data-lucide={iconSlug(name)} className={className}></i>
+      );
+
+      const formatTimestamp = (timestamp) => {
+        if (!timestamp) return 'Unknown';
+        try {
+          return new Date(timestamp).toLocaleString();
+        } catch (err) {
+          return timestamp;
+        }
+      };
+
+      const buildMutationEvents = (edges = [], nodes = []) => {
+        const nodeMap = nodes.reduce((acc, node) => {
+          acc[node.id] = node;
+          return acc;
+        }, {});
+        return edges
+          .filter((edge) => edge.attributes?.relation_type === 'Mutation')
+          .sort((a, b) => (b.attributes?.mutation_score ?? 0) - (a.attributes?.mutation_score ?? 0))
+          .slice(0, 5)
+          .map((edge) => ({
+            node: edge.target,
+            score: edge.attributes?.mutation_score ?? 0,
+            type: 'mutation',
+            timestamp: nodeMap[edge.target]?.timestamp || 'N/A',
+            title: nodeMap[edge.target]?.content?.slice(0, 80) || edge.target,
+          }));
+      };
+
+      const enrichNodes = (graph) => {
+        const edges = graph.edges || [];
+        const scoreMap = edges.reduce((acc, edge) => {
+          if (edge.target) {
+            acc[edge.target] = edge.attributes?.mutation_score ?? 0;
+          }
+          return acc;
+        }, {});
+        return (graph.nodes || []).map((node) => ({
+          id: node.id,
+          title: node.content?.split('. ')[0] || node.id,
+          url: node.id,
+          mutationScore: scoreMap[node.id] ?? 0,
+          timestamp: node.timestamp,
+          author: node.author || 'Unknown',
+          depth: node.depth || 0,
+          content: node.content || '',
+        }));
+      };
+
+      function PhylosUI() {
+        const [url, setUrl] = useState('');
+        const [maxDepth, setMaxDepth] = useState(3);
+        const [isAnalyzing, setIsAnalyzing] = useState(false);
+        const [graphData, setGraphData] = useState(null);
+        const [selectedNode, setSelectedNode] = useState(null);
+        const [mutationEvents, setMutationEvents] = useState([]);
+        const [telemetry, setTelemetry] = useState({ events: 0, nodes: 0, mutations: 0, replications: 0 });
+        const [summary, setSummary] = useState('Submit a URL to begin a trace.');
+        const [sessionId, setSessionId] = useState(null);
+        const [chatMessages, setChatMessages] = useState([
+          { role: 'system', text: 'Submit a source URL and select "Trace Origin" to begin.' },
+        ]);
+        const [chatInput, setChatInput] = useState('');
+        const wsRef = useRef(null);
+
+        useEffect(() => {
+          return () => {
+            if (wsRef.current) {
+              wsRef.current.close();
+            }
+          };
+        }, []);
+
+        useEffect(() => {
+          if (window.lucide && typeof window.lucide.createIcons === 'function') {
+            window.lucide.createIcons();
+          }
+        });
+
+        const appendMessage = (role, text) => {
+          setChatMessages((prev) => [...prev, { role, text }]);
+        };
+
+        const fetchGraphSnapshot = async (id) => {
+          try {
+            const response = await fetch(`/session/${id}/graph`);
+            if (!response.ok) {
+              throw new Error('Failed to load graph snapshot');
+            }
+            const payload = await response.json();
+            const enrichedNodes = enrichNodes(payload);
+            setGraphData({ nodes: enrichedNodes, edges: payload.edges || [] });
+            if (enrichedNodes.length) {
+              setSelectedNode(enrichedNodes[0]);
+            }
+            setMutationEvents(buildMutationEvents(payload.edges, enrichedNodes));
+            setTelemetry((prev) => ({
+              ...prev,
+              nodes: payload.stats?.nodes ?? prev.nodes,
+              mutations: payload.stats?.mutations ?? prev.mutations,
+              replications: payload.stats?.replications ?? prev.replications,
+            }));
+          } catch (error) {
+            console.error(error);
+            appendMessage('system', 'Unable to load final graph snapshot.');
+          }
+        };
+
+        const handleSocketMessage = (message) => {
+          if (message.status) {
+            if (message.status === 'session') {
+              setSessionId(message.session_id);
+              appendMessage('system', `Session established (${message.session_id.slice(0, 8)}…).`);
+              return;
+            }
+            if (message.status === 'summary') {
+              setSummary(message.summary || 'Summary unavailable.');
+              appendMessage('assistant', 'Trace complete. Ask me what you would like to investigate.');
+              setIsAnalyzing(false);
+              if (message.session_id) {
+                fetchGraphSnapshot(message.session_id);
+              } else if (sessionId) {
+                fetchGraphSnapshot(sessionId);
+              }
+              return;
+            }
+            if (message.status === 'info') {
+              appendMessage('system', message.message || 'Info update received.');
+              return;
+            }
+            if (message.status === 'error') {
+              appendMessage('system', message.message || 'An error occurred.');
+              setIsAnalyzing(false);
+              return;
+            }
+          }
+
+          if (message.event) {
+            const data = message.data || {};
+            const knowledgeGraph = data.knowledge_graph || {};
+            const edgeStats = data.edge_stats || {};
+            setTelemetry((prev) => {
+              const nodeCount = typeof knowledgeGraph.node_count === 'number' ? knowledgeGraph.node_count : prev.nodes;
+              const mutationIncrement = typeof edgeStats.mutation_count === 'number' ? edgeStats.mutation_count : 0;
+              const replicationIncrement = typeof edgeStats.replication_count === 'number' ? edgeStats.replication_count : 0;
+              return {
+                events: prev.events + 1,
+                nodes: Math.max(prev.nodes, nodeCount),
+                mutations: prev.mutations + mutationIncrement,
+                replications: prev.replications + replicationIncrement,
+              };
+            });
+          }
+        };
+
+        const startAnalysis = () => {
+          if (!url || isAnalyzing) return;
+          setIsAnalyzing(true);
+          setGraphData(null);
+          setSelectedNode(null);
+          setMutationEvents([]);
+          setTelemetry({ events: 0, nodes: 0, mutations: 0, replications: 0 });
+          setSummary('Tracing narrative lineage...');
+          setChatMessages([{ role: 'system', text: 'Investigation running… chat will unlock once complete.' }]);
+          if (wsRef.current) {
+            wsRef.current.close();
+          }
+          const protocol = window.location.protocol === 'https:' ? 'wss' : 'ws';
+          const wsUrl = `${protocol}://${window.location.host}/ws/dna-stream`;
+          const ws = new WebSocket(wsUrl);
+          wsRef.current = ws;
+
+          ws.onopen = () => {
+            ws.send(JSON.stringify({ start_url: url, max_depth: Number(maxDepth) || 1 }));
+          };
+          ws.onmessage = (event) => {
+            try {
+              const payload = JSON.parse(event.data);
+              handleSocketMessage(payload);
+            } catch (error) {
+              console.error('Failed to parse WebSocket message', error);
+            }
+          };
+          ws.onerror = () => {
+            appendMessage('system', 'WebSocket error encountered.');
+            setIsAnalyzing(false);
+          };
+          ws.onclose = () => {
+            setIsAnalyzing(false);
+          };
+        };
+
+        const sendChatMessage = async (evt) => {
+          evt.preventDefault();
+          if (!chatInput.trim() || !sessionId) {
+            return;
+          }
+          const message = chatInput.trim();
+          setChatInput('');
+          appendMessage('user', message);
+          try {
+            const response = await fetch('/chat', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ session_id: sessionId, message }),
+            });
+            const payload = await response.json();
+            if (!response.ok) {
+              appendMessage('system', payload.detail || 'Chat failed.');
+              return;
+            }
+            appendMessage('assistant', payload.reply || 'I need more context.');
+          } catch (error) {
+            appendMessage('system', 'Unable to reach chat endpoint.');
+          }
+        };
+
+        const getMutationColor = (score) => {
+          if (score < 0.2) return 'bg-emerald-800';
+          if (score < 0.5) return 'bg-amber-700';
+          return 'bg-red-900';
+        };
+
+        const getMutationLabel = (score) => {
+          if (score < 0.2) return 'Authentic';
+          if (score < 0.5) return 'Modified';
+          return 'Corrupted';
+        };
+
+        const averageMutation = graphData?.nodes?.length
+          ? graphData.nodes.reduce((acc, node) => acc + (node.mutationScore || 0), 0) / graphData.nodes.length
+          : 0;
+
+        const renderTraceButton = () => {
+          if (isAnalyzing) {
+            return (
+              <div className="flex items-center gap-2">
+                <div className="w-5 h-5 border-2 border-amber-200/30 border-t-amber-200 rounded-full animate-spin"></div>
+                <span>Investigating</span>
+              </div>
+            );
+          }
+          return (
+            <div className="flex items-center gap-2">
+              <LucideIcon name="Zap" className="w-5 h-5" />
+              <span>Trace Origin</span>
+            </div>
 
       const formatTimestamp = (timestamp) => {
         if (!timestamp) return 'Unknown';
