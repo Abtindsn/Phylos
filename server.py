@@ -26,6 +26,39 @@ if LOG_FILE:
 logging.basicConfig(level=LOG_LEVEL, format=LOG_FORMAT, handlers=handlers)
 logger = logging.getLogger("phylos.server")
 
+# --- Helpers ---
+MAX_LIST_ITEMS = int(os.getenv("PHYLOS_EVENT_MAX_ITEMS", "8"))
+MAX_STRING_LENGTH = int(os.getenv("PHYLOS_EVENT_MAX_STRING", "240"))
+MAX_RECURSION_DEPTH = int(os.getenv("PHYLOS_EVENT_MAX_DEPTH", "4"))
+
+def _sanitize_payload(value, depth=0):
+    """Trim large numeric arrays and long strings before streaming to the UI."""
+    if depth > MAX_RECURSION_DEPTH:
+        return "<truncated>"
+
+    if isinstance(value, (int, float, bool)) or value is None:
+        return value
+
+    if isinstance(value, str):
+        return value if len(value) <= MAX_STRING_LENGTH else value[:MAX_STRING_LENGTH] + "…"
+
+    if isinstance(value, list):
+        if not value:
+            return []
+        if all(isinstance(item, (int, float)) for item in value):
+            if len(value) > MAX_LIST_ITEMS:
+                return value[:MAX_LIST_ITEMS] + [f"...({len(value) - MAX_LIST_ITEMS} more)"]
+            return value
+        trimmed = [_sanitize_payload(item, depth + 1) for item in value[:MAX_LIST_ITEMS]]
+        if len(value) > MAX_LIST_ITEMS:
+            trimmed.append(f"...({len(value) - MAX_LIST_ITEMS} more)")
+        return trimmed
+
+    if isinstance(value, dict):
+        return {key: _sanitize_payload(val, depth + 1) for key, val in value.items()}
+
+    return str(value)
+
 # --- Local Imports ---
 from state import GraphState, InitialArticleRequest
 from graph_builder import app, embedder, fetch_article_content, GRAPH_RECURSION_LIMIT
@@ -664,10 +697,11 @@ async def websocket_endpoint(websocket: WebSocket):
                 event.get("name"),
                 event_keys,
             )
+            sanitized_data = _sanitize_payload(event.get("data"))
             await websocket.send_json({
                 "event": event["event"],
                 "name": event["name"],
-                "data": event["data"],
+                "data": sanitized_data,
             })
         
         await websocket.send_json({"status": "info", "message": "Graph traversal complete."})
