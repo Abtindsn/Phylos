@@ -1,7 +1,6 @@
 """
 Defines the strict, typed state for the narrative analysis graph and the data models for API communication.
 """
-import operator
 from typing import TypedDict, List, Dict, Any, Annotated, Tuple
 from pydantic import BaseModel, Field
 
@@ -56,13 +55,17 @@ def reduce_knowledge_graph(left: KnowledgeGraph, right: KnowledgeGraph) -> Knowl
         "edges": left.get("edges", []) + right.get("edges", []),
     }
 
+def replace_queue(_: List[Tuple[str, str | None, int]], right: List[Tuple[str, str | None, int]]) -> List[Tuple[str, str | None, int]]:
+    """Reducer that always prefers the latest traversal queue."""
+    return right
+
 class GraphState(TypedDict):
     """
     The central state of our recursive analysis engine.
     It's passed between nodes and updated at each step.
     """
     # The queue of (URL, parent_URL, current_depth) to visit
-    traversal_queue: Annotated[List[Tuple[str, str, int]], operator.add]
+    traversal_queue: Annotated[List[Tuple[str, str | None, int]], replace_queue]
 
     # The accumulated graph of articles and their relationships
     knowledge_graph: Annotated[KnowledgeGraph, reduce_knowledge_graph]

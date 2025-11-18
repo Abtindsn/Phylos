@@ -162,11 +162,12 @@ def node_acquire(state: "GraphState") -> Dict[str, Any]:
     Acquires the next article from the traversal queue.
     """
     print(">>> In Node: Acquire")
-    queue = state["traversal_queue"]
+    queue = list(state["traversal_queue"])
     url, parent_id, depth = queue.pop(0)
 
     article_data = fetch_article_content(url)
     article_data["embedding"] = embedder(article_data["content"])
+    article_data["depth"] = depth
 
     return {
         "traversal_queue": queue,
@@ -233,20 +234,21 @@ def node_branch(state: "GraphState") -> Dict[str, Any]:
     """
     print(">>> In Node: Branch")
     current_article = state["current_article"]
-    current_depth = state.get("current_depth", 0)
+    current_depth = 0 if not current_article else current_article.get("depth", 0)
 
     if current_depth >= state["max_depth"]:
         print(f"--- Max depth ({state['max_depth']}) reached. Halting branching.")
-        return {"traversal_queue": []}
+        return {}
 
     new_links = extract_links(current_article["content"], current_article["id"])
     print(f"--- Found {len(new_links)} new links to explore.")
     
     new_depth = current_depth + 1
     next_level_queue = [(link, current_article["id"], new_depth) for link in new_links]
+    updated_queue = list(state["traversal_queue"]) + next_level_queue
 
     return {
-        "traversal_queue": next_level_queue,
+        "traversal_queue": updated_queue,
     }
 
 
