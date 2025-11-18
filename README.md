@@ -57,6 +57,8 @@ This guide provides a complete, copy-paste-friendly set of commands to get the a
     # PHYLOS_MAX_VISITS_PER_HOST=8
     # Optional: limit how many referenced URLs per article we surface (default 40)
     # PHYLOS_REFERENCE_PREVIEW_LIMIT=40
+    # Optional: extend the link blocklist (comma-separated host suffixes)
+    # PHYLOS_LINK_BLOCKLIST=example.com,offline.phylos
     ```
 
     > **Important:** Setting `PHYLOS_OFFLINE_MODE=1` forces the crawler to use stubbed
@@ -91,6 +93,10 @@ This guide provides a complete, copy-paste-friendly set of commands to get the a
 > ```
 >
 > When omitted, the backend falls back to the server default (3).
+>
+> Bad/binary links are skipped automatically now. If a URL resolves to an image,
+> video, or any unsupported content type, Phylos discards it instead of inventing
+> placeholder "simulated" articles—keeping the Chronicle free of nonsense blobs.
 
     The FastAPI server will now be running and accessible at `http://localhost:8000`. You can connect to the WebSocket at `ws://localhost:8000/ws/dna-stream`.
 

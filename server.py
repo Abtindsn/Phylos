@@ -298,7 +298,20 @@ def _build_edge_snapshots(edges: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         })
     return cleaned
 
-def _build_node_snapshots(graph: Dict[str, Any]) -> List[Dict[str, Any]]:
+def _origin_similarity(origin_embedding, target_embedding):
+    if not origin_embedding or not target_embedding:
+        return None
+    try:
+        drift = calculate_semantic_drift(origin_embedding, target_embedding)
+        similarity = 1.0 - drift
+        return max(0.0, min(1.0, similarity))
+    except Exception:
+        return None
+
+def _build_node_snapshots(
+    graph: Dict[str, Any],
+    origin_embedding: List[float] | None = None,
+) -> List[Dict[str, Any]]:
     edges = graph.get("edges") or []
     score_map: Dict[str, float] = {}
     for edge in edges:
@@ -309,6 +322,7 @@ def _build_node_snapshots(graph: Dict[str, Any]) -> List[Dict[str, Any]]:
     nodes = []
     for node_id, payload in (graph.get("nodes") or {}).items():
         resolved_id = payload.get("id", node_id)
+        similarity = _origin_similarity(origin_embedding, payload.get("embedding"))
         nodes.append({
             "id": resolved_id,
             "content": payload.get("content", ""),
@@ -317,12 +331,20 @@ def _build_node_snapshots(graph: Dict[str, Any]) -> List[Dict[str, Any]]:
             "depth": payload.get("depth", 0),
             "mutation_score": score_map.get(resolved_id, score_map.get(node_id, 0.0)),
             "outbound_links": payload.get("outbound_links") or [],
+            "origin_similarity": similarity,
         })
     return nodes
 
 # --- Local Imports ---
 from state import GraphState, InitialArticleRequest
-from graph_builder import app, embedder, fetch_article_content, GRAPH_RECURSION_LIMIT, generate_text_response
+from graph_builder import (
+    app,
+    embedder,
+    fetch_article_content,
+    GRAPH_RECURSION_LIMIT,
+    generate_text_response,
+    calculate_semantic_drift,
+)
 
 # --- Session Storage ---
 SESSION_CONTEXTS: Dict[str, Dict[str, Any]] = {}
@@ -1149,7 +1171,8 @@ async def session_graph(session_id: str):
         raise HTTPException(status_code=404, detail="Session not found.")
 
     graph = context.get("knowledge_graph") or {"nodes": {}, "edges": []}
-    node_snapshots = _build_node_snapshots(graph)
+    origin_info = context.get("origin") or {}
+    node_snapshots = _build_node_snapshots(graph, origin_embedding=origin_info.get("embedding"))
     edge_snapshots = _build_edge_snapshots(graph.get("edges") or [])
     stats = {
         "nodes": len(node_snapshots),
@@ -1161,6 +1184,7 @@ async def session_graph(session_id: str):
         "nodes": node_snapshots,
         "edges": edge_snapshots,
         "stats": stats,
+        "origin": {"url": origin_info.get("url")},
     }
 
 
@@ -1196,6 +1220,10 @@ async def websocket_endpoint(websocket: WebSocket):
             "current_article": None,
             "parent_article_id": None,
             "max_depth": request.max_depth,
+        }
+        session_context["origin"] = {
+            "url": request.start_url,
+            "embedding": global_context_embedding,
         }
         logger.debug(
             "Initial graph state seeded: queue=%s max_depth=%s",

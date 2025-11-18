@@ -40,6 +40,7 @@ class Article(TypedDict):
     author: str | None
     timestamp: str | None
     embedding: List[float]
+    outbound_links: List[str] | None
 
 class KnowledgeGraph(TypedDict):
     """The accumulated knowledge graph."""

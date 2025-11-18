@@ -121,13 +121,17 @@
           .filter((edge) => edge.attributes?.relation_type === 'Mutation')
           .sort((a, b) => (b.attributes?.mutation_score ?? 0) - (a.attributes?.mutation_score ?? 0))
           .slice(0, 5)
-          .map((edge) => ({
-            node: edge.target,
-            score: edge.attributes?.mutation_score ?? 0,
-            type: 'mutation',
-            timestamp: nodeMap[edge.target]?.timestamp || 'N/A',
-            title: nodeMap[edge.target]?.content?.slice(0, 80) || edge.target,
-          }));
+          .map((edge) => {
+            const nodeInfo = nodeMap[edge.target] || {};
+            return {
+              node: edge.target,
+              score: edge.attributes?.mutation_score ?? 0,
+              type: 'mutation',
+              timestamp: nodeInfo.timestamp || 'N/A',
+              title: nodeInfo.content?.slice(0, 80) || edge.target,
+              url: nodeInfo.url || edge.target,
+            };
+          });
       };
 
       const DEPTH_CHOICES = [1, 2, 3, 4, 5, 6];
@@ -164,6 +168,15 @@
         overflow: 'hidden',
       });
 
+      const formatPercent = (value) => (
+        typeof value === 'number' ? `${(value * 100).toFixed(1)}%` : 'n/a'
+      );
+
+      const parseTimestamp = (value) => {
+        const ts = Date.parse(value);
+        return Number.isNaN(ts) ? null : ts;
+      };
+
       const enrichNodes = (graph) => {
         const edges = graph.edges || [];
         const scoreMap = edges.reduce((acc, edge) => {
@@ -173,7 +186,7 @@
           return acc;
         }, {});
         const rawNodes = Array.isArray(graph.nodes) ? graph.nodes : [];
-        return rawNodes.map((node) => {
+        const mapped = rawNodes.map((node) => {
           const id = node.id;
           const mutationScore = typeof node.mutation_score === 'number'
             ? node.mutation_score
@@ -186,11 +199,23 @@
             url: id,
             mutationScore,
             timestamp: node.timestamp,
+            timestampValue: parseTimestamp(node.timestamp),
             author: node.author || 'Unknown',
             depth: node.depth || 0,
             content: node.content || '',
             references,
+            originSimilarity: typeof node.origin_similarity === 'number' ? node.origin_similarity : null,
           };
+        });
+        return mapped.sort((a, b) => {
+          const ta = a.timestampValue;
+          const tb = b.timestampValue;
+          if (ta === null && tb === null) {
+            return a.title.localeCompare(b.title);
+          }
+          if (ta === null) return 1;
+          if (tb === null) return -1;
+          return ta - tb;
         });
       };
 
@@ -236,7 +261,11 @@
             }
             const payload = await response.json();
             const enrichedNodes = enrichNodes(payload);
-            setGraphData({ nodes: enrichedNodes, edges: payload.edges || [] });
+            setGraphData({
+              nodes: enrichedNodes,
+              edges: payload.edges || [],
+              origin: payload.origin || {},
+            });
             if (enrichedNodes.length) {
               setSelectedNode(enrichedNodes[0]);
             }
@@ -381,6 +410,8 @@
         const averageMutation = graphData?.nodes?.length
           ? graphData.nodes.reduce((acc, node) => acc + (node.mutationScore || 0), 0) / graphData.nodes.length
           : 0;
+        const earliestNode = graphData?.nodes?.[0] || null;
+        const originMatchScore = earliestNode?.originSimilarity ?? null;
 
         return (
           <div className="min-h-screen bg-gradient-to-b from-slate-900 via-blue-950 to-indigo-950 text-gray-100">
@@ -516,31 +547,36 @@
 
                     {/* Newspaper-style article cards */}
                     <div className="space-y-4">
-                      {graphData.nodes.map((node, idx) => (
-                        <div
-                          key={node.id}
-                          onClick={() => setSelectedNode(node)}
-                          className={`p-5 border-2 cursor-pointer transition-all ${
-                            selectedNode?.id === node.id
-                              ? 'bg-amber-900/20 border-amber-700/60 shadow-lg'
-                              : 'bg-black/30 border-amber-900/30 hover:border-amber-800/50 hover:bg-amber-950/20'
-                          }`}
-                        >
-                          <div className="flex items-start gap-4">
-                            <div className={`w-14 h-14 ${getMutationColor(node.mutationScore)} border-2 ${
-                              node.mutationScore < 0.2 ? 'border-emerald-600' :
-                              node.mutationScore < 0.5 ? 'border-amber-500' :
-                              'border-red-700'
-                            } flex items-center justify-center flex-shrink-0 shadow-lg`}>
-                              {node.mutationScore < 0.2 ? (
-                                <LucideIcon name="Shield" className="w-7 h-7 text-emerald-100" />
-                              ) : node.mutationScore < 0.5 ? (
-                                <LucideIcon name="TrendingUp" className="w-7 h-7 text-amber-100" />
-                              ) : (
-                                <LucideIcon name="AlertTriangle" className="w-7 h-7 text-red-100" />
-                              )}
-                            </div>
-                            <div className="flex-1 min-w-0">
+                      {graphData.nodes.map((node, idx) => {
+                        const targetUrl = node.url || '#';
+                        return (
+                          <a
+                            key={node.id}
+                            href={targetUrl}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            onClick={() => setSelectedNode(node)}
+                            className={`block p-5 border-2 cursor-pointer transition-all ${
+                              selectedNode?.id === node.id
+                                ? 'bg-amber-900/20 border-amber-700/60 shadow-lg'
+                                : 'bg-black/30 border-amber-900/30 hover:border-amber-800/50 hover:bg-amber-950/20'
+                            }`}
+                          >
+                            <div className="flex items-start gap-4">
+                              <div className={`w-14 h-14 ${getMutationColor(node.mutationScore)} border-2 ${
+                                node.mutationScore < 0.2 ? 'border-emerald-600' :
+                                node.mutationScore < 0.5 ? 'border-amber-500' :
+                                'border-red-700'
+                              } flex items-center justify-center flex-shrink-0 shadow-lg`}>
+                                {node.mutationScore < 0.2 ? (
+                                  <LucideIcon name="Shield" className="w-7 h-7 text-emerald-100" />
+                                ) : node.mutationScore < 0.5 ? (
+                                  <LucideIcon name="TrendingUp" className="w-7 h-7 text-amber-100" />
+                                ) : (
+                                  <LucideIcon name="AlertTriangle" className="w-7 h-7 text-red-100" />
+                                )}
+                              </div>
+                              <div className="flex-1 min-w-0">
                               <div className="flex items-start justify-between mb-2">
                                 <div className="flex-1">
                                   <h4
@@ -552,13 +588,13 @@
                                   <p className="text-xs text-amber-700/70 uppercase tracking-wide font-serif mb-2">
                                     By {node.author}
                                   </p>
-                                  <p
-                                    className="text-sm text-amber-200/80 font-serif"
-                                    style={clampStyle(3)}
-                                  >
-                                    {node.summary || 'Summary unavailable.'}
-                                  </p>
-                                </div>
+                                    <p
+                                      className="text-sm text-amber-200/80 font-serif"
+                                      style={clampStyle(3)}
+                                    >
+                                      {node.summary || 'Summary unavailable.'}
+                                    </p>
+                                  </div>
                                 <span className={`text-xs px-3 py-1 border-2 ml-4 ${
                                   node.mutationScore < 0.2 ? 'bg-emerald-900/40 border-emerald-700 text-emerald-200' :
                                   node.mutationScore < 0.5 ? 'bg-amber-900/40 border-amber-700 text-amber-200' :
@@ -566,18 +602,30 @@
                                 } font-serif uppercase tracking-wider`}>
                                   {getMutationLabel(node.mutationScore)}
                                 </span>
+                                {idx === 0 && (
+                                  <span className="ml-3 text-xs px-3 py-1 border border-emerald-500 text-emerald-200 uppercase tracking-wider font-serif">
+                                    Original Source
+                                  </span>
+                                )}
                               </div>
                               <p className="text-sm text-amber-300/50 font-mono truncate border-l-2 border-amber-900/30 pl-3">{node.url}</p>
                               <div className="flex items-center gap-4 mt-3 text-xs text-amber-600/60 font-serif italic border-t border-amber-900/20 pt-2">
                                 <span>Mutation Index: {node.mutationScore.toFixed(3)}</span>
                                 <span>•</span>
                                 <span>Published: {formatTimestamp(node.timestamp)}</span>
+                                {typeof node.originSimilarity === 'number' && (
+                                  <>
+                                    <span>•</span>
+                                    <span>Origin Match: {formatPercent(node.originSimilarity)}</span>
+                                  </>
+                                )}
                               </div>
                             </div>
-                            <LucideIcon name="ChevronRight" className="w-5 h-5 text-amber-700/40" />
+                            <LucideIcon name="ExternalLink" className="w-5 h-5 text-amber-700/40" />
                           </div>
-                        </div>
-                      ))}
+                          </a>
+                        );
+                      })}
                     </div>
                   </div>
 
@@ -604,6 +652,17 @@
                             {averageMutation.toFixed(3)}
                           </span>
                         </div>
+                        <div className="flex justify-between items-center border-b border-amber-900/20 pb-2">
+                          <span className="text-amber-300/70 text-sm">Origin Match</span>
+                          <span className="font-bold text-2xl text-amber-100">
+                            {formatPercent(originMatchScore)}
+                          </span>
+                        </div>
+                        <div className="text-xs text-amber-400/70 italic">
+                          {earliestNode
+                            ? `Earliest source: ${earliestNode.title}`
+                            : 'Earliest source not yet discovered.'}
+                        </div>
                       </div>
                     </div>
 
@@ -615,17 +674,33 @@
                       </h3>
                       <div className="space-y-3">
                         {mutationEvents.map((event, idx) => (
-                          <div key={idx} className="p-4 bg-black/40 border-2 border-red-900/30">
+                          <a
+                            key={idx}
+                            href={event.url || '#'}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            onClick={() => {
+                              const targetNode = graphData?.nodes?.find((node) => node.id === event.node);
+                              if (targetNode) {
+                                setSelectedNode(targetNode);
+                              }
+                            }}
+                            className="block p-4 bg-black/40 border-2 border-red-900/30 hover:border-red-600/50 transition-colors"
+                          >
                             <div className="flex items-center justify-between mb-2 pb-2 border-b border-red-900/20">
-                              <span className="text-xs font-serif text-red-300 uppercase tracking-wider">
+                              <span className="text-xs font-serif text-red-300 uppercase tracking-wider flex items-center gap-2">
                                 {event.type.replace('_', ' ')}
+                                <LucideIcon name="ExternalLink" className="w-3.5 h-3.5" />
                               </span>
                               <span className="text-sm text-red-200 font-bold font-mono">
                                 {event.score.toFixed(3)}
                               </span>
                             </div>
+                            <p className="text-xs text-amber-200/80 font-serif mb-1" style={clampStyle(2)}>
+                              {event.title}
+                            </p>
                             <p className="text-xs text-amber-400/60 font-serif italic">{formatTimestamp(event.timestamp)}</p>
-                          </div>
+                          </a>
                         ))}
                         {mutationEvents.length === 0 && (
                           <p className="text-sm text-red-300/50 font-serif italic text-center py-4">
@@ -668,6 +743,20 @@
                                 />
                               </div>
                               <span className="font-bold font-mono text-amber-100">{selectedNode.mutationScore.toFixed(3)}</span>
+                            </div>
+                          </div>
+                          <div>
+                            <span className="text-amber-600/80 block mb-2 uppercase text-xs tracking-wide">Origin Similarity</span>
+                            <div className="flex items-center gap-3">
+                              <div className="flex-1 h-3 bg-black/40 border border-amber-900/30 overflow-hidden">
+                                <div
+                                  className="h-full bg-amber-800 border-r-2 border-amber-500"
+                                  style={{ width: `${(selectedNode.originSimilarity || 0) * 100}%` }}
+                                />
+                              </div>
+                              <span className="font-bold font-mono text-amber-100">
+                                {formatPercent(selectedNode.originSimilarity)}
+                              </span>
                             </div>
                           </div>
                           <div>

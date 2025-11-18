@@ -20,6 +20,7 @@ from urllib.parse import urljoin, urlparse
 
 import requests
 from bs4 import BeautifulSoup
+import re
 
 # --- API and Model Configuration ---
 load_dotenv()
@@ -33,6 +34,40 @@ HTTP_HEADERS = {
         "PHYLOS_HTTP_USER_AGENT",
         "PhylosCrawler/1.0 (+https://github.com/abtin/Phylos)"
     )
+}
+# Block obvious stub/share domains. Users can override via PHYLOS_LINK_BLOCKLIST.
+DEFAULT_BLOCKLIST = {
+    "example.com",
+    "offline.phylos",
+}
+LINK_BLOCKLIST_SUFFIXES = {
+    host.strip().lower()
+    for host in os.getenv("PHYLOS_LINK_BLOCKLIST", ",".join(DEFAULT_BLOCKLIST)).split(",")
+    if host.strip()
+}
+SOCIAL_SHARE_HOSTS = {
+    "facebook.com",
+    "m.facebook.com",
+    "twitter.com",
+    "x.com",
+    "t.co",
+    "reddit.com",
+    "www.reddit.com",
+    "pinterest.com",
+    "instagram.com",
+    "threads.net",
+    "linkedin.com",
+    "youtube.com",
+    "youtu.be",
+    "bsky.app",
+    "tiktok.com",
+    "whatsapp.com",
+}
+SOCIAL_SHARE_KEYWORDS = {"share", "sharer", "intent", "compose", "bookmark", "login", "post"}
+RAW_URL_PATTERN = re.compile(r'https?://[^\s"\'>)]+')
+DISALLOWED_EXTENSIONS = {
+    ".jpg", ".jpeg", ".png", ".gif", ".bmp", ".svg", ".webp", ".webm", ".mp4", ".mp3", ".mov",
+    ".pdf", ".zip", ".rar", ".iso", ".dmg", ".exe", ".bin", ".apk", ".tar", ".gz"
 }
 
 logger = logging.getLogger("phylos.graph")
@@ -59,6 +94,35 @@ STUB_EMBED_DIM = 128
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+def _normalized_host(url: str) -> str:
+    parsed = urlparse(url)
+    host = parsed.netloc.lower()
+    if not host:
+        return ""
+    host = host.split(":")[0]
+    if host.startswith("www."):
+        host = host[4:]
+    return host
+
+def _has_disallowed_extension(url: str) -> bool:
+    path = urlparse(url).path.lower()
+    return any(path.endswith(ext) for ext in DISALLOWED_EXTENSIONS)
+
+def _is_blocked_link(url: str) -> bool:
+    host = _normalized_host(url)
+    if not host:
+        return False
+    if _has_disallowed_extension(url):
+        return True
+    if any(host == suffix or host.endswith(f".{suffix}") for suffix in LINK_BLOCKLIST_SUFFIXES):
+        return True
+    if any(host == suffix or host.endswith(f".{suffix}") for suffix in SOCIAL_SHARE_HOSTS):
+        parsed = urlparse(url)
+        haystack = f"{parsed.path} {parsed.query}".lower()
+        if any(keyword in haystack for keyword in SOCIAL_SHARE_KEYWORDS):
+            return True
+    return False
 
 # --- Core Utilities ---
 
@@ -114,14 +178,16 @@ def fetch_article_content(url: str) -> Dict[str, Any]:
 
     def _stub():
         random_tail = uuid.uuid4()
+        simulated = f"https://offline.phylos/simulated/{random_tail}"
         return {
             "id": url,
             "content": (
-                f"This is the simulated content for the article at {url}. "
-                f"It mentions another article: http://example.com/{random_tail}"
+                f"This is simulated fallback content for {url}. "
+                f"Real content could not be retrieved, but an offline reference is provided: {simulated}"
             ),
             "author": "Unknown",
             "timestamp": _now_iso(),
+            "outbound_links": [simulated],
         }
 
     if FORCE_OFFLINE:
@@ -131,10 +197,17 @@ def fetch_article_content(url: str) -> Dict[str, Any]:
         response = requests.get(url, headers=HTTP_HEADERS, timeout=REQUEST_TIMEOUT, allow_redirects=True)
         response.raise_for_status()
     except Exception as exc:
-        logger.warning("Failed to fetch %s (%s). Falling back to stub.", url, exc)
-        return _stub()
+        logger.warning("Failed to fetch %s (%s). Skipping.", url, exc)
+        return None
 
-    soup = BeautifulSoup(response.text, "html.parser")
+    content_type = (response.headers.get("Content-Type") or "").lower()
+    allowed_types = ("text/html", "application/xhtml", "application/xml", "text/plain")
+    if content_type and not any(t in content_type for t in allowed_types):
+        logger.info("Skipping %s due to unsupported content type: %s", url, content_type)
+        return None
+
+    raw_html = response.text
+    soup = BeautifulSoup(raw_html, "html.parser")
     for tag in soup(["script", "style", "noscript", "svg", "form", "header", "footer", "nav"]):
         tag.decompose()
 
@@ -146,8 +219,8 @@ def fetch_article_content(url: str) -> Dict[str, Any]:
     content = "\n\n".join(paragraphs) or soup.get_text(" ", strip=True)
     content = content.strip()
     if not content:
-        logger.warning("No readable text extracted from %s. Using stub.", url)
-        return _stub()
+        logger.warning("No readable text extracted from %s. Skipping.", url)
+        return None
 
     title = soup.title.string.strip() if soup.title and soup.title.string else url
 
@@ -182,6 +255,8 @@ def fetch_article_content(url: str) -> Dict[str, Any]:
         absolute = urljoin(url, normalized)
         if not absolute.startswith("http"):
             return
+        if _is_blocked_link(absolute):
+            return
         if absolute in seen_links:
             return
         seen_links.add(absolute)
@@ -213,19 +288,46 @@ def fetch_article_content(url: str) -> Dict[str, Any]:
                 if content and "http" in content:
                     _append_link(content)
 
+    base_host = _normalized_host(url)
+    def _discover_hidden_links():
+        if not raw_html:
+            return []
+        discovered: List[str] = []
+        for match in RAW_URL_PATTERN.finditer(raw_html):
+            candidate = match.group(0).rstrip(').,;"')
+            if not candidate.startswith("http"):
+                continue
+            if _is_blocked_link(candidate):
+                continue
+            host = _normalized_host(candidate)
+            if not host or host == base_host:
+                continue
+            if candidate in seen_links:
+                continue
+            seen_links.add(candidate)
+            discovered.append(candidate)
+            if len(discovered) >= 24:
+                break
+        return discovered
+
     prioritized_links: List[str] = []
     if outbound_links:
-        base_host = urlparse(url).netloc.lower()
         off_domain_links: List[str] = []
         on_domain_links: List[str] = []
         for link in outbound_links:
-            host = urlparse(link).netloc.lower()
+            host = _normalized_host(link)
             if host == base_host:
                 on_domain_links.append(link)
             else:
                 off_domain_links.append(link)
         prioritized_links = off_domain_links + on_domain_links
-        max_preview = int(os.getenv("PHYLOS_REFERENCE_PREVIEW_LIMIT", "40"))
+
+    if len([link for link in prioritized_links if _normalized_host(link) != base_host]) < 2:
+        hidden = _discover_hidden_links()
+        prioritized_links.extend(hidden)
+
+    max_preview = int(os.getenv("PHYLOS_REFERENCE_PREVIEW_LIMIT", "40"))
+    if prioritized_links and max_preview > 0:
         preview = "\n".join(prioritized_links[:max_preview])
         if preview:
             content = f"{content}\n\nReferenced URLs:\n{preview}"
@@ -241,14 +343,15 @@ def fetch_article_content(url: str) -> Dict[str, Any]:
 def extract_links(content: str, base_url: str) -> List[str]:
     """Extracts outbound links, preferring sources outside the current domain."""
     logger.debug("Extracting links from content.")
-    import re
 
-    raw_urls = re.findall(r'https?://[^\s,\)\]\"<>]+', content)
+    raw_urls = RAW_URL_PATTERN.findall(content)
     seen: set[str] = set()
     cleaned: List[str] = []
     for raw in raw_urls:
         candidate = raw.rstrip(').,;"')
         if candidate in seen:
+            continue
+        if _is_blocked_link(candidate):
             continue
         seen.add(candidate)
         cleaned.append(candidate)
@@ -328,20 +431,40 @@ def node_acquire(state: "GraphState") -> Dict[str, Any]:
     """
     logger.info("Node: Acquire")
     queue = list(state["traversal_queue"])
-    url, parent_id, depth = queue.pop(0)
+    article_data = None
+    url = parent_id = None
+    depth = 0
 
-    article_data = fetch_article_content(url)
+    while queue:
+        url, parent_id, depth = queue.pop(0)
+        candidate = fetch_article_content(url)
+        if candidate:
+            article_data = candidate
+            break
+        logger.info("Skipping %s due to missing or unsupported content.", url)
+
+    if not article_data:
+        return {
+            "traversal_queue": queue,
+            "current_article": None,
+            "parent_article_id": None,
+            "current_depth": 0,
+            "knowledge_graph": {"nodes": {}, "edges": []},
+        }
+
     article_data["embedding"] = embedder(article_data["content"])
     article_data["depth"] = depth
+    article_data.setdefault("outbound_links", [])
 
     visited = list(state.get("visited_urls", []))
-    if url not in visited:
+    if url and url not in visited:
         visited.append(url)
 
     host_counts = dict(state.get("host_visit_counts", {}))
-    host = urlparse(url).netloc.lower()
-    if host:
-        host_counts[host] = host_counts.get(host, 0) + 1
+    if url:
+        host = urlparse(url).netloc.lower()
+        if host:
+            host_counts[host] = host_counts.get(host, 0) + 1
 
     return {
         "traversal_queue": queue,
@@ -410,6 +533,9 @@ def node_branch(state: "GraphState") -> Dict[str, Any]:
     """
     logger.info("Node: Branch")
     current_article = state["current_article"]
+    if not current_article:
+        logger.info("No current article available for branching.")
+        return {}
     current_depth = 0 if not current_article else current_article.get("depth", 0)
 
     if current_depth >= state["max_depth"]:
