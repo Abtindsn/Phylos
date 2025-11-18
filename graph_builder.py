@@ -42,7 +42,7 @@ embedding_model = "models/embedding-001"
 GRAPH_RECURSION_LIMIT = int(os.getenv("PHYLOS_RECURSION_LIMIT", "500"))
 _executor = ThreadPoolExecutor(max_workers=2)
 _gemini_embeddings_available = USE_GEMINI
-_gemini_summaries_available = USE_GEMINI
+_gemini_text_available = USE_GEMINI
 STUB_EMBED_DIM = 128
 
 # --- Core Utilities ---
@@ -147,8 +147,8 @@ def summarize_mutation(parent_content: str, child_content: str) -> str:
 
 def generate_text_response(prompt: str, fallback: str) -> str:
     """Generic helper to request text from the LLM with graceful fallback."""
-    global _gemini_summaries_available
-    if llm is None or not _gemini_summaries_available:
+    global _gemini_text_available
+    if llm is None or not _gemini_text_available:
         return fallback
 
     def _call():
@@ -159,7 +159,7 @@ def generate_text_response(prompt: str, fallback: str) -> str:
         return response.text
     except (TimeoutError, Exception) as e:
         logger.warning("LLM text generation failed (%s). Falling back to stub.", e)
-        _gemini_summaries_available = False
+        _gemini_text_available = False
         return fallback
 
 

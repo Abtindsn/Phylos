@@ -50,7 +50,7 @@ def _brief_article(article: dict | None) -> dict | None:
         "content_preview": _shorten(article.get("content", ""), MAX_STRING_LENGTH),
     }
 
-def _summarize_event_data(data):
+def _summarize_event_data(data, edge_updates=None):
     if not isinstance(data, dict):
         return data
     summary = dict(data)
@@ -88,6 +88,35 @@ def _summarize_event_data(data):
         }
     if "traversal_queue" in summary and isinstance(summary["traversal_queue"], list):
         summary["traversal_queue"] = summary["traversal_queue"][:MAX_LIST_ITEMS]
+
+    clean_updates = []
+    mutation_count = 0
+    replication_count = 0
+    edge_updates = edge_updates or []
+    for edge in edge_updates[:MAX_LIST_ITEMS]:
+        attrs = edge.get("attributes") or {}
+        relation = attrs.get("relation_type")
+        if relation == "Mutation":
+            mutation_count += 1
+        elif relation == "Replication":
+            replication_count += 1
+        clean_updates.append({
+            "source": edge.get("source"),
+            "target": edge.get("target"),
+            "attributes": {
+                "relation_type": relation,
+                "mutation_score": attrs.get("mutation_score"),
+                "summary_preview": _shorten(attrs.get("summary", ""), MAX_STRING_LENGTH // 2),
+            }
+        })
+    if clean_updates:
+        summary["edge_updates"] = clean_updates
+    if mutation_count or replication_count:
+        summary["edge_stats"] = {
+            "mutation_count": mutation_count,
+            "replication_count": replication_count,
+        }
+
     return summary
 
 def _sanitize_payload(value, depth=0):
@@ -168,9 +197,19 @@ def _generate_graph_summary(graph: Dict[str, Any]) -> str:
         }
         for edge in graph.get("edges", [])[:5]
     ]
+    edge_lines = []
+    for edge in sample_edges:
+        rel = edge["relation"] or "Unknown"
+        score = edge["score"]
+        try:
+            score_text = f"{float(score):.2f}"
+        except (TypeError, ValueError):
+            score_text = "-"
+        edge_lines.append(f"{edge['source']} -> {edge['target']} ({rel}, score {score_text})")
+    edge_snippet = "; ".join(edge_lines) if edge_lines else "No mutation edges captured."
     fallback = (
-        f"The trace built a narrative graph with {node_count} nodes and {edge_count} relationships. "
-        f"Representative edges: {sample_edges}."
+        f"The trace captured {node_count} unique sources tied together by {edge_count} narrative relationships. "
+        f"Mutation hotspots observed along: {edge_snippet}. Use these as jumping-off points for deeper review."
     )
     prompt = f"""
     You are Gemini. Provide a concise but insightful summary of a narrative trace.
@@ -184,9 +223,11 @@ def _generate_graph_summary(graph: Dict[str, Any]) -> str:
     return generate_text_response(prompt, fallback)
 
 def _generate_chat_reply(summary: str, history: List[Dict[str, str]], question: str) -> str:
+    summary_preview = _shorten(summary, 220)
     fallback = (
-        "Based on the trace summary, the narrative shifts around the listed mutation edges. "
-        "Consider reviewing those sources for more context."
+        f"Here's what the trace uncovered: {summary_preview} "
+        f"In response to your question \"{question}\", focus on the mutations mentioned above—they mark where the narrative diverges most. "
+        "Trace those sources to validate their claims or find corroborating evidence."
     )
     history_text = "\n".join(f"{item['role']}: {item['content']}" for item in history[-6:])
     prompt = f"""
@@ -203,6 +244,35 @@ def _generate_chat_reply(summary: str, history: List[Dict[str, str]], question: 
     Respond concisely (<=120 words) and suggest next investigative steps when useful.
     """
     return generate_text_response(prompt, fallback)
+
+def _collect_edges_from_section(section: Any) -> List[Dict[str, Any]]:
+    edges: List[Dict[str, Any]] = []
+    def traverse(obj: Any):
+        if isinstance(obj, dict):
+            kg = obj.get("knowledge_graph")
+            if isinstance(kg, dict):
+                edge_list = kg.get("edges")
+                if isinstance(edge_list, list) and edge_list:
+                    edges.extend(edge_list)
+            for key, value in obj.items():
+                if key == "knowledge_graph":
+                    continue
+                traverse(value)
+        elif isinstance(obj, list):
+            for item in obj:
+                traverse(item)
+    traverse(section)
+    return edges
+
+def _extract_edge_updates(raw_data: Any) -> List[Dict[str, Any]]:
+    if not isinstance(raw_data, dict):
+        return []
+    updates: List[Dict[str, Any]] = []
+    for key in ("chunk", "output"):
+        section = raw_data.get(key)
+        if section:
+            updates.extend(_collect_edges_from_section(section))
+    return updates
 
 # --- Local Imports ---
 from state import GraphState, InitialArticleRequest
@@ -420,28 +490,77 @@ HTML = """
             gap: 12px;
         }
         .chat-messages {
-            max-height: 220px;
+            max-height: 240px;
             overflow-y: auto;
             display: flex;
             flex-direction: column;
-            gap: 8px;
+            gap: 10px;
+            background: rgba(255, 255, 255, 0.02);
+            border: 1px solid rgba(255, 255, 255, 0.05);
+            border-radius: 12px;
+            padding: 12px;
         }
         .chat-entry {
-            padding: 8px 10px;
-            border-radius: 10px;
+            display: flex;
+            gap: 10px;
+            align-items: flex-start;
+        }
+        .chat-entry .avatar {
+            width: 38px;
+            height: 38px;
+            border-radius: 50%;
+            background: rgba(255, 255, 255, 0.08);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: 600;
+            font-size: 0.85rem;
+        }
+        .chat-entry .bubble {
+            border-radius: 16px;
+            padding: 10px 14px;
+            border: 1px solid rgba(255, 255, 255, 0.08);
             background: rgba(255, 255, 255, 0.03);
-            border: 1px solid rgba(255, 255, 255, 0.05);
+            max-width: 75%;
+        }
+        .chat-entry.user {
+            flex-direction: row-reverse;
+            text-align: right;
+        }
+        .chat-entry.user .bubble {
+            background: linear-gradient(135deg, rgba(109, 255, 214, 0.25), rgba(43, 166, 255, 0.2));
+            border-color: rgba(109, 255, 214, 0.4);
+        }
+        .chat-entry.user .avatar {
+            background: linear-gradient(135deg, #6dffd6, #2ba6ff);
+            color: #062335;
+        }
+        .chat-entry.assistant .bubble {
+            background: rgba(146, 112, 255, 0.18);
+            border-color: rgba(146, 112, 255, 0.4);
+        }
+        .chat-entry.assistant .avatar {
+            background: rgba(146, 112, 255, 0.35);
+            color: #ffffff;
+        }
+        .chat-entry.system .bubble {
+            background: rgba(255, 193, 59, 0.15);
+            border-color: rgba(255, 193, 59, 0.4);
+        }
+        .chat-entry.system .avatar {
+            background: rgba(255, 193, 59, 0.3);
+            color: #2d1a00;
         }
         .chat-entry strong {
             display: block;
+            font-size: 0.85rem;
             margin-bottom: 4px;
-            color: #9ad5ff;
+            color: #d6e3ff;
         }
-        .chat-entry.assistant strong {
-            color: #ff86d6;
-        }
-        .chat-entry.system strong {
-            color: #ffd27f;
+        .chat-entry p {
+            margin: 0;
+            font-size: 0.9rem;
+            line-height: 1.35;
         }
         pre {
             margin: 0;
@@ -729,7 +848,23 @@ HTML = """
                 }
                 const entry = document.createElement('div');
                 entry.className = `chat-entry ${type}`;
-                entry.innerHTML = `<strong>${author}</strong><p>${text}</p>`;
+
+                const avatar = document.createElement('div');
+                avatar.className = 'avatar';
+                avatar.textContent = type === 'assistant' ? 'G' : type === 'user' ? 'You' : '!';
+
+                const bubble = document.createElement('div');
+                bubble.className = 'bubble';
+                const authorEl = document.createElement('strong');
+                authorEl.textContent = author;
+                const textEl = document.createElement('p');
+                textEl.textContent = text;
+                bubble.appendChild(authorEl);
+                bubble.appendChild(textEl);
+
+                entry.appendChild(avatar);
+                entry.appendChild(bubble);
+
                 chatMessages.appendChild(entry);
                 chatMessages.scrollTop = chatMessages.scrollHeight;
             }
@@ -762,7 +897,11 @@ HTML = """
                     stats.nodes = seenNodes.size;
                 }
 
-                if (data.knowledge_graph && Array.isArray(data.knowledge_graph.edges)) {
+                const edgeStats = data.edge_stats;
+                if (edgeStats) {
+                    stats.mutations += edgeStats.mutation_count || 0;
+                    stats.replications += edgeStats.replication_count || 0;
+                } else if (data.knowledge_graph && Array.isArray(data.knowledge_graph.edges)) {
                     data.knowledge_graph.edges.forEach(function(edge) {
                         const relation = edge.attributes && edge.attributes.relation_type;
                         if (relation === 'Mutation') {
@@ -996,6 +1135,7 @@ async def websocket_endpoint(websocket: WebSocket):
             config={"recursion_limit": GRAPH_RECURSION_LIMIT},
         ):
             raw_data = event.get("data")
+            edge_updates = _extract_edge_updates(raw_data)
             _accumulate_graph(session_context["knowledge_graph"], raw_data)
             event_keys = list((event.get("data") or {}).keys())
             logger.debug(
@@ -1004,7 +1144,7 @@ async def websocket_endpoint(websocket: WebSocket):
                 event.get("name"),
                 event_keys,
             )
-            summarized_data = _summarize_event_data(event.get("data"))
+            summarized_data = _summarize_event_data(raw_data, edge_updates=edge_updates)
             sanitized_data = _sanitize_payload(summarized_data)
             await websocket.send_json({
                 "event": event["event"],
