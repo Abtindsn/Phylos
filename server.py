@@ -204,20 +204,6 @@ def _generate_chat_reply(summary: str, history: List[Dict[str, str]], question: 
     """
     return generate_text_response(prompt, fallback)
 
-@api.post("/chat")
-async def chat_endpoint(request: ChatRequest):
-    context = SESSION_CONTEXTS.get(request.session_id)
-    if not context:
-        raise HTTPException(status_code=404, detail="Session not found. Run a trace first.")
-    if not context.get("summary"):
-        raise HTTPException(status_code=400, detail="Summary not ready yet. Please wait for the trace to finish.")
-
-    history: List[Dict[str, str]] = context.setdefault("history", [])
-    history.append({"role": "user", "content": request.message})
-    reply = _generate_chat_reply(context["summary"], history, request.message)
-    history.append({"role": "assistant", "content": reply})
-    return {"reply": reply}
-
 # --- Local Imports ---
 from state import GraphState, InitialArticleRequest
 from graph_builder import app, embedder, fetch_article_content, GRAPH_RECURSION_LIMIT, generate_text_response
@@ -949,6 +935,21 @@ HTML = """
 async def get():
     """Serves a simple HTML page to interact with the WebSocket."""
     return HTMLResponse(HTML)
+
+@api.post("/chat")
+async def chat_endpoint(request: ChatRequest):
+    """Handles follow-up chat requests about the latest trace summary."""
+    context = SESSION_CONTEXTS.get(request.session_id)
+    if not context:
+        raise HTTPException(status_code=404, detail="Session not found. Run a trace first.")
+    if not context.get("summary"):
+        raise HTTPException(status_code=400, detail="Summary not ready yet. Please wait for the trace to finish.")
+
+    history: List[Dict[str, str]] = context.setdefault("history", [])
+    history.append({"role": "user", "content": request.message})
+    reply = _generate_chat_reply(context["summary"], history, request.message)
+    history.append({"role": "assistant", "content": reply})
+    return {"reply": reply}
 
 
 @api.websocket("/ws/dna-stream")
