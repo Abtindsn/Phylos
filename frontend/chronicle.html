@@ -398,18 +398,14 @@
       }
 
       const html = createHtmlRenderer(React.createElement);
-      const htmlFragment = (strings, ...values) => {
-        let markup = '';
-        for (let i = 0; i < strings.length; i += 1) {
-          markup += strings[i];
-          if (i < values.length) {
-            markup += values[i];
-          }
-        }
-        const template = document.createElement('template');
-        template.innerHTML = markup;
-        return template.content.firstElementChild;
-      };
+      const iconSlug = (name) =>
+        name
+          .replace(/([a-z0-9])([A-Z])/g, '$1-$2')
+          .replace(/([A-Za-z])(\d+)/g, '$1-$2')
+          .toLowerCase();
+
+      const iconElement = (name, className) =>
+        React.createElement('i', { 'data-lucide': iconSlug(name), className });
 
       const formatTimestamp = (timestamp) => {
         if (!timestamp) return 'Unknown';
