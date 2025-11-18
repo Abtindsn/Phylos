@@ -413,6 +413,8 @@
         );
       };
 
+      const iconElement = (name, className) => React.createElement(LucideIcon, { name, className });
+
       const formatTimestamp = (timestamp) => {
         if (!timestamp) return 'Unknown';
         try {
@@ -672,7 +674,7 @@
           }
           return html`
             <div className="flex items-center gap-2">
-              <${LucideIcon} name="Zap" className="w-5 h-5" />
+              ${iconElement("Zap", "w-5 h-5")}
               <span>Trace Origin</span>
             </div>
           `;
@@ -688,7 +690,7 @@
                 <div className="border-b-2 border-amber-900/30 pb-4 mb-6">
                   <div className="flex items-center justify-between">
                     <div className="flex items-center gap-3">
-                      <${LucideIcon} name="Link2" className="w-5 h-5 text-amber-700" />
+                      ${iconElement("Link2", "w-5 h-5 text-amber-700")}
                       <h3 className="text-xl font-serif text-amber-100/90">Citation Network</h3>
                     </div>
                     <div className="flex gap-3 text-xs font-serif">
@@ -734,10 +736,10 @@
                         <div className="flex items-start gap-4">
                           <div className=${`w-14 h-14 ${getMutationColor(node.mutationScore)} border-2 ${borderClass} flex items-center justify-center flex-shrink-0 shadow-lg`}>
                             ${node.mutationScore < 0.2
-                              ? html`<${LucideIcon} name="Shield" className="w-7 h-7 text-emerald-100" />`
+                              ? html`${iconElement("Shield", "w-7 h-7 text-emerald-100")}`
                               : node.mutationScore < 0.5
-                              ? html`<${LucideIcon} name="TrendingUp" className="w-7 h-7 text-amber-100" />`
-                              : html`<${LucideIcon} name="AlertTriangle" className="w-7 h-7 text-red-100" />`}
+                              ? html`${iconElement("TrendingUp", "w-7 h-7 text-amber-100")}`
+                              : html`${iconElement("AlertTriangle", "w-7 h-7 text-red-100")}`}
                           </div>
                           <div className="flex-1 min-w-0">
                             <div className="flex items-start justify-between mb-2">
@@ -756,7 +758,7 @@
                               <span>Published: ${formatTimestamp(node.timestamp)}</span>
                             </div>
                           </div>
-                          <${LucideIcon} name="ChevronRight" className="w-5 h-5 text-amber-700/40" />
+                          ${iconElement("ChevronRight", "w-5 h-5 text-amber-700/40")}
                         </div>
                       </div>
                     `;
@@ -767,7 +769,7 @@
               <div className="space-y-6">
                 <div className="bg-gradient-to-br from-slate-900/50 to-slate-800/40 rounded-sm p-6 border-2 border-amber-900/30 backdrop-blur-md shadow-2xl">
                   <h3 className="text-lg font-serif text-amber-100/90 mb-4 pb-2 border-b-2 border-amber-900/30 flex items-center gap-2">
-                    <${LucideIcon} name="Activity" className="w-5 h-5 text-amber-700" />
+                    ${iconElement("Activity", "w-5 h-5 text-amber-700")}
                     Investigation Report
                   </h3>
                   <div className="space-y-4 font-serif">
@@ -796,7 +798,7 @@
 
                 <div className="bg-gradient-to-br from-red-950/40 to-slate-900/50 rounded-sm p-6 border-2 border-red-900/40 backdrop-blur-md shadow-2xl">
                   <h3 className="text-lg font-serif text-red-200 mb-4 pb-2 border-b-2 border-red-900/30 flex items-center gap-2">
-                    <${LucideIcon} name="AlertTriangle" className="w-5 h-5 text-red-400" />
+                    ${iconElement("AlertTriangle", "w-5 h-5 text-red-400")}
                     Corruption Alerts
                   </h3>
                   <div className="space-y-3">
@@ -868,7 +870,7 @@
           return html`
             <div className="text-center py-20">
               <div className="w-32 h-32 bg-amber-950/20 border-4 border-double border-amber-900/40 flex items-center justify-center mx-auto mb-6">
-                <${LucideIcon} name="Newspaper" className="w-16 h-16 text-amber-700/40" />
+                ${iconElement("Newspaper", "w-16 h-16 text-amber-700/40")}
               </div>
               <h3 className="text-2xl font-serif text-amber-200/70 mb-3">Awaiting Investigation</h3>
               <p className="text-amber-400/50 text-sm font-serif italic max-w-md mx-auto">
@@ -899,7 +901,7 @@
                 <div className="text-center border-b border-amber-800/20 pb-4 mb-4">
                   <div className="flex items-center justify-center gap-3 mb-2">
                     <div className="h-px w-20 bg-gradient-to-r from-transparent to-amber-700/50"></div>
-                    <${LucideIcon} name="Newspaper" className="w-5 h-5 text-amber-700/70" />
+                    ${iconElement("Newspaper", "w-5 h-5 text-amber-700/70")}
                     <div className="h-px w-20 bg-gradient-to-l from-transparent to-amber-700/50"></div>
                   </div>
                   <h1
@@ -931,7 +933,7 @@
                   <div className="absolute bottom-4 right-4 text-6xl text-amber-900/10 font-serif">"</div>
 
                   <div className="flex items-center gap-3 mb-4">
-                    <${LucideIcon} name="Eye" className="w-5 h-5 text-amber-700" />
+                    ${iconElement("Eye", "w-5 h-5 text-amber-700")}
                     <h2 className="text-xl font-serif text-amber-100/90">Investigation Desk</h2>
                   </div>
                   <p className="text-amber-200/60 mb-6 text-sm font-serif italic">
@@ -940,7 +942,7 @@
 
                   <div className="flex flex-col lg:flex-row gap-3">
                     <div className="flex-1 relative">
-                      <${LucideIcon} name="Search" className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-amber-700/50" />
+                      ${iconElement("Search", "absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-amber-700/50")}
                       <input
                         type="text"
                         value=${url}
@@ -976,14 +978,14 @@
               <div className="mt-8 grid grid-cols-1 lg:grid-cols-2 gap-6">
                 <div className="bg-gradient-to-br from-slate-900/50 to-slate-800/40 rounded-sm p-6 border-2 border-amber-900/30 backdrop-blur-md shadow-2xl">
                   <h3 className="text-lg font-serif text-amber-100/90 mb-3 flex items-center gap-2">
-                    <${LucideIcon} name="Globe" className="w-5 h-5 text-amber-700" />
+                    ${iconElement("Globe", "w-5 h-5 text-amber-700")}
                     Gemini Debrief
                   </h3>
                   <div className="summary-box text-sm font-serif text-amber-200/80">${summary}</div>
                 </div>
                 <div className="bg-gradient-to-br from-slate-900/50 to-slate-800/40 rounded-sm p-6 border-2 border-amber-900/30 backdrop-blur-md shadow-2xl">
                   <h3 className="text-lg font-serif text-amber-100/90 mb-3 flex items-center gap-2">
-                    <${LucideIcon} name="Activity" className="w-5 h-5 text-amber-700" />
+                    ${iconElement("Activity", "w-5 h-5 text-amber-700")}
                     Gemini Chat
                   </h3>
                   <div className="chat-panel">
@@ -1011,7 +1013,7 @@
                         disabled=${!sessionId}
                         className="px-6 py-2 bg-gradient-to-b from-amber-800 to-amber-900 rounded-sm font-serif uppercase text-xs tracking-wider hover:from-amber-700 hover:to-amber-800 disabled:opacity-50 disabled:cursor-not-allowed transition-all flex items-center gap-2 shadow-lg border border-amber-700/50"
                       >
-                        <${LucideIcon} name="MessageCircle" className="w-4 h-4" />
+                        ${iconElement("MessageCircle", "w-4 h-4")}
                         Ask Gemini
                       </button>
                     </form>
@@ -1033,7 +1035,7 @@
 
       const root = document.getElementById('root');
       if (root) {
-        ReactDOM.render(html`<${PhylosUI} />`, root);
+        ReactDOM.render(React.createElement(PhylosUI), root);
       }
         } catch (error) {
           const root = document.getElementById('root');
