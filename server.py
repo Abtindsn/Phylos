@@ -346,20 +346,28 @@ HTML = """
             let ws = null;
             let stats = { events: 0, nodes: 0, mutations: 0, replications: 0 };
             const seenNodes = new Set();
-            const fallbackEndpoint = 'ws://localhost:8000/ws/dna-stream';
+            const fallbackEndpoint = null;
             let manualEndpointSupplied = false;
             let attemptedFallback = false;
             let activePayload = null;
 
             function computeDefaultEndpoint() {
                 const baseProtocol = window.location.protocol === 'https:' ? 'wss' : 'ws';
-                return `${baseProtocol}://${window.location.host}/ws/dna-stream`;
+                let hostname = window.location.hostname;
+                if (!hostname || hostname === '0.0.0.0' || hostname === '::' || hostname === '[::]') {
+                    hostname = '127.0.0.1';
+                }
+                const port = window.location.port ? `:${window.location.port}` : '';
+                return `${baseProtocol}://${hostname}${port}/ws/dna-stream`;
             }
 
             function refreshEndpointHints() {
                 const auto = computeDefaultEndpoint();
                 if (autoEndpointEl) {
                     autoEndpointEl.textContent = auto;
+                }
+                if (statusEndpoint && !statusEndpoint.textContent) {
+                    statusEndpoint.textContent = auto;
                 }
                 if (!wsInput.value.trim() && statusEndpoint) {
                     statusEndpoint.textContent = auto;
@@ -512,9 +520,9 @@ HTML = """
                 ws.onerror = function(event) {
                     const detail = event?.message || (event?.error && event.error.message) || `readyState=${ws?.readyState ?? 'n/a'}`;
                     addLogEntry('error', 'WebSocket error', { endpoint, detail });
-                    if (!manualEndpointSupplied && !attemptedFallback && endpoint !== fallbackEndpoint) {
+                    if (!manualEndpointSupplied && !attemptedFallback && fallbackEndpoint) {
                         attemptedFallback = true;
-                        addLogEntry('system', 'Retrying via localhost fallback', { endpoint: fallbackEndpoint });
+                        addLogEntry('system', 'Retrying via fallback', { endpoint: fallbackEndpoint });
                         connectWebSocket(fallbackEndpoint);
                         return;
                     }
