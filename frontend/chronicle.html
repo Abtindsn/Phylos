@@ -364,20 +364,34 @@
       const LucideIcon = ({ name, className }) => {
         const icon = window.lucide && window.lucide.icons && window.lucide.icons[name];
         if (!icon) return null;
+
+        const normalizeChildren = (children) => {
+          if (!children) {
+            return [];
+          }
+          return Array.isArray(children) ? children : [children];
+        };
+
         const renderNode = (node, key) => {
           if (!node) return null;
-          const [tag, attrs, children] = node;
+          const tuple = Array.isArray(node) ? node : [node];
+          const tag = tuple[0];
+          const attrs = tuple[1] || {};
+          const childNodes = normalizeChildren(tuple[2]);
           return React.createElement(
             tag,
             { ...attrs, key, stroke: 'currentColor', fill: 'none' },
-            children && children.map((child, index) => renderNode(child, `${key}-${index}`))
+            childNodes.map((child, index) => renderNode(child, `${key}-${index}`))
           );
         };
-        const [tag, attrs, children] = icon;
+
+        const tag = icon[0];
+        const attrs = icon[1] || {};
+        const children = normalizeChildren(icon[2]);
         return React.createElement(
           tag,
           { ...attrs, className, stroke: 'currentColor', fill: 'none' },
-          children && children.map((child, index) => renderNode(child, index))
+          children.map((child, index) => renderNode(child, index))
         );
       };
 
