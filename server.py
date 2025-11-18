@@ -121,6 +121,14 @@ HTML = """
             color: #e6eef8;
             box-shadow: none;
         }
+        .hint {
+            color: #7f93b1;
+            font-size: 0.8rem;
+            margin: 6px 0 0;
+        }
+        .hint code {
+            color: #c8d8ee;
+        }
         .status-row {
             display: flex;
             justify-content: space-between;
@@ -258,6 +266,10 @@ HTML = """
                     <label for="max-depth">Max Depth</label>
                     <input type="number" id="max-depth" min="1" max="6" value="2" />
 
+                    <label for="ws-endpoint">WebSocket Endpoint (optional)</label>
+                    <input type="text" id="ws-endpoint" placeholder="auto (derived from this page)" />
+                    <p class="hint">Auto endpoint: <code id="ws-endpoint-auto"></code></p>
+
                     <div class="controls">
                         <button type="submit" id="start-btn">Stream Narrative DNA</button>
                         <button type="button" class="secondary" id="stop-btn">Stop</button>
@@ -274,6 +286,7 @@ HTML = """
                     <h3>Connection</h3>
                     <span id="status-badge" class="badge idle">Idle</span>
                 </div>
+                <p class="hint">Active endpoint: <code id="status-endpoint"></code></p>
                 <div class="stats">
                     <div class="stat">
                         <span class="value" id="stat-events">0</span>
@@ -315,10 +328,13 @@ HTML = """
         (function() {
             const urlInput = document.getElementById('start-url');
             const depthInput = document.getElementById('max-depth');
+            const wsInput = document.getElementById('ws-endpoint');
             const form = document.getElementById('trace-form');
             const stopBtn = document.getElementById('stop-btn');
             const clearBtn = document.getElementById('clear-btn');
             const statusBadge = document.getElementById('status-badge');
+            const statusEndpoint = document.getElementById('status-endpoint');
+            const autoEndpointEl = document.getElementById('ws-endpoint-auto');
             const logContainer = document.getElementById('log');
             const queueList = document.getElementById('queue');
             const payloadPreview = document.getElementById('payload-preview');
@@ -330,9 +346,26 @@ HTML = """
             let ws = null;
             let stats = { events: 0, nodes: 0, mutations: 0, replications: 0 };
             const seenNodes = new Set();
+            const fallbackEndpoint = 'ws://localhost:8000/ws/dna-stream';
+            let manualEndpointSupplied = false;
+            let attemptedFallback = false;
+            let activePayload = null;
 
-            const protocol = window.location.protocol === 'https:' ? 'wss' : 'ws';
-            const endpoint = `${protocol}://${window.location.host}/ws/dna-stream`;
+            function computeDefaultEndpoint() {
+                const baseProtocol = window.location.protocol === 'https:' ? 'wss' : 'ws';
+                return `${baseProtocol}://${window.location.host}/ws/dna-stream`;
+            }
+
+            function refreshEndpointHints() {
+                const auto = computeDefaultEndpoint();
+                if (autoEndpointEl) {
+                    autoEndpointEl.textContent = auto;
+                }
+                if (!wsInput.value.trim() && statusEndpoint) {
+                    statusEndpoint.textContent = auto;
+                }
+            }
+            refreshEndpointHints();
 
             function updateStatus(state, text) {
                 statusBadge.className = `badge ${state}`;
@@ -435,6 +468,70 @@ HTML = """
                 addLogEntry('event', title, message);
             }
 
+            function teardownSocket() {
+                if (ws) {
+                    try {
+                        ws.onclose = null;
+                        ws.onerror = null;
+                        ws.onmessage = null;
+                        ws.close(1000, 'Restarting trace');
+                    } catch (err) {}
+                    ws = null;
+                }
+            }
+
+            function connectWebSocket(endpoint) {
+                if (!endpoint) {
+                    endpoint = computeDefaultEndpoint();
+                }
+                teardownSocket();
+                updateStatus('connecting', 'Connecting...');
+                if (statusEndpoint) {
+                    statusEndpoint.textContent = endpoint;
+                }
+
+                ws = new WebSocket(endpoint);
+
+                ws.onopen = function() {
+                    updateStatus('connected', 'Streaming');
+                    addLogEntry('system', 'Connected - streaming events', { endpoint });
+                    if (activePayload) {
+                        ws.send(JSON.stringify(activePayload));
+                    }
+                };
+
+                ws.onmessage = function(event) {
+                    try {
+                        const msg = JSON.parse(event.data);
+                        handleIncoming(msg);
+                    } catch (err) {
+                        addLogEntry('error', 'Failed to parse event', { endpoint, raw: event.data });
+                    }
+                };
+
+                ws.onerror = function(event) {
+                    const detail = event?.message || (event?.error && event.error.message) || `readyState=${ws?.readyState ?? 'n/a'}`;
+                    addLogEntry('error', 'WebSocket error', { endpoint, detail });
+                    if (!manualEndpointSupplied && !attemptedFallback && endpoint !== fallbackEndpoint) {
+                        attemptedFallback = true;
+                        addLogEntry('system', 'Retrying via localhost fallback', { endpoint: fallbackEndpoint });
+                        connectWebSocket(fallbackEndpoint);
+                        return;
+                    }
+                    updateStatus('error', 'Error');
+                };
+
+                ws.onclose = function(evt) {
+                    const info = { endpoint, code: evt.code, reason: evt.reason || 'n/a' };
+                    const wasIntentional = evt.code === 1000;
+                    addLogEntry('system', wasIntentional ? 'Trace ended' : 'Connection closed unexpectedly', info);
+                    if (ws === this) {
+                        ws = null;
+                    }
+                    updateStatus('idle', 'Idle');
+                };
+            }
+
             function startTrace(evt) {
                 evt.preventDefault();
                 const payload = {
@@ -447,58 +544,36 @@ HTML = """
                     return;
                 }
 
+                manualEndpointSupplied = Boolean(wsInput.value.trim());
+                attemptedFallback = false;
+                activePayload = payload;
+
                 payloadPreview.textContent = JSON.stringify(payload, null, 2);
                 resetStats();
 
-                if (ws) {
-                    ws.close(1000, 'Restarting trace');
-                }
-
-                updateStatus('connecting', 'Connecting...');
-                addLogEntry('system', 'Connecting to agent', payload);
-
-                ws = new WebSocket(endpoint);
-
-                ws.onopen = function() {
-                    updateStatus('connected', 'Streaming');
-                    addLogEntry('system', 'Connected - streaming events', null);
-                    ws.send(JSON.stringify(payload));
-                };
-
-                ws.onmessage = function(event) {
-                    try {
-                        const msg = JSON.parse(event.data);
-                        handleIncoming(msg);
-                    } catch (err) {
-                        addLogEntry('error', 'Failed to parse event', event.data);
-                    }
-                };
-
-                ws.onerror = function() {
-                    updateStatus('error', 'Error');
-                    addLogEntry('error', 'WebSocket error', 'Check backend logs for more details.');
-                };
-
-                ws.onclose = function(evt) {
-                    const reason = evt.reason || 'Connection closed';
-                    const wasIntentional = evt.code === 1000;
-                    updateStatus('idle', 'Idle');
-                    addLogEntry('system', wasIntentional ? 'Trace ended' : 'Connection closed unexpectedly', reason);
-                    ws = null;
-                };
+                const targetEndpoint = wsInput.value.trim() || computeDefaultEndpoint();
+                addLogEntry('system', 'Connecting to agent', { ...payload, endpoint: targetEndpoint });
+                connectWebSocket(targetEndpoint);
             }
 
             function stopTrace() {
                 if (ws) {
+                    ws.onclose = null;
+                    ws.onerror = null;
                     ws.close(1000, 'Stopped by user');
                     ws = null;
                 }
+                addLogEntry('system', 'Trace stopped', 'Stopped by user');
+                updateStatus('idle', 'Idle');
             }
 
             function clearLog() {
                 logContainer.innerHTML = '<div class="empty">Log cleared.</div>';
             }
 
+            if (wsInput) {
+                wsInput.addEventListener('input', refreshEndpointHints);
+            }
             form.addEventListener('submit', startTrace);
             stopBtn.addEventListener('click', stopTrace);
             clearBtn.addEventListener('click', clearLog);
@@ -532,7 +607,7 @@ async def websocket_endpoint(websocket: WebSocket):
         global_context_embedding = embedder(patient_zero_content["content"])
 
         initial_state: GraphState = {
-            "traversal_queue": [(request.start_url, "GLOBAL_CONTEXT", 0)], # (url, parent_id, depth)
+            "traversal_queue": [(request.start_url, None, 0)], # (url, parent_id, depth)
             "knowledge_graph": {"nodes": {}, "edges": []},
             "global_context": global_context_embedding,
             "current_article": None,
