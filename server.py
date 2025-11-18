@@ -1,8 +1,6 @@
 
-FastAPI server to expose the Narrative DNA Sequencer via a WebSocket.
-
-This server provides a real-time streaming endpoint for clients to observe
-the graph traversal and analysis as it happens.
+# FastAPI server for the Narrative DNA Sequencer.
+# Provides a WebSocket endpoint so clients can stream traversal events.
 
 import json
 import uvicorn
