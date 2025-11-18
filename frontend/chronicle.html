@@ -120,21 +120,42 @@
         }
       };
 
+      const readAttr = (container, key) => {
+        if (!container || typeof container !== 'object') {
+          return undefined;
+        }
+        return container[key];
+      };
+
+      const readScore = (value) => {
+        const num = typeof value === 'number' ? value : parseFloat(value);
+        return Number.isFinite(num) ? num : 0;
+      };
+
       const buildMutationEvents = (edges = [], nodes = []) => {
         const nodeMap = nodes.reduce((acc, node) => {
           acc[node.id] = node;
           return acc;
         }, {});
         return edges
-          .filter((edge) => edge.attributes?.relation_type === 'Mutation')
-          .sort((a, b) => (b.attributes?.mutation_score ?? 0) - (a.attributes?.mutation_score ?? 0))
+          .filter((edge) => {
+            const attrs = readAttr(edge, 'attributes');
+            return attrs && attrs.relation_type === 'Mutation';
+          })
+          .sort((a, b) => {
+            const aScore = readScore(readAttr(readAttr(a, 'attributes'), 'mutation_score'));
+            const bScore = readScore(readAttr(readAttr(b, 'attributes'), 'mutation_score'));
+            return bScore - aScore;
+          })
           .slice(0, 5)
           .map((edge) => ({
             node: edge.target,
-            score: edge.attributes?.mutation_score ?? 0,
+            score: readScore(readAttr(readAttr(edge, 'attributes'), 'mutation_score')),
             type: 'mutation',
-            timestamp: nodeMap[edge.target]?.timestamp || 'N/A',
-            title: nodeMap[edge.target]?.content?.slice(0, 80) || edge.target,
+            timestamp: (nodeMap[edge.target] && nodeMap[edge.target].timestamp) || 'N/A',
+            title: nodeMap[edge.target] && nodeMap[edge.target].content
+              ? nodeMap[edge.target].content.slice(0, 80)
+              : edge.target,
           }));
       };
 
@@ -142,15 +163,16 @@
         const edges = graph.edges || [];
         const scoreMap = edges.reduce((acc, edge) => {
           if (edge.target) {
-            acc[edge.target] = edge.attributes?.mutation_score ?? 0;
+            const attrs = readAttr(edge, 'attributes');
+            acc[edge.target] = readScore(attrs && attrs.mutation_score);
           }
           return acc;
         }, {});
         return (graph.nodes || []).map((node) => ({
           id: node.id,
-          title: node.content?.split('. ')[0] || node.id,
+          title: node.content && node.content.split('. ')[0] ? node.content.split('. ')[0] : node.id,
           url: node.id,
-          mutationScore: scoreMap[node.id] ?? 0,
+          mutationScore: scoreMap[node.id] || 0,
           timestamp: node.timestamp,
           author: node.author || 'Unknown',
           depth: node.depth || 0,
@@ -199,11 +221,12 @@
               setSelectedNode(enrichedNodes[0]);
             }
             setMutationEvents(buildMutationEvents(payload.edges, enrichedNodes));
+            const stats = payload.stats || {};
             setTelemetry((prev) => ({
               ...prev,
-              nodes: payload.stats?.nodes ?? prev.nodes,
-              mutations: payload.stats?.mutations ?? prev.mutations,
-              replications: payload.stats?.replications ?? prev.replications,
+              nodes: typeof stats.nodes === 'number' ? stats.nodes : prev.nodes,
+              mutations: typeof stats.mutations === 'number' ? stats.mutations : prev.mutations,
+              replications: typeof stats.replications === 'number' ? stats.replications : prev.replications,
             }));
           } catch (error) {
             console.error(error);
@@ -241,12 +264,20 @@
           }
 
           if (message.event) {
-            setTelemetry((prev) => ({
-              events: prev.events + 1,
-              nodes: Math.max(prev.nodes, message.data?.knowledge_graph?.node_count || prev.nodes),
-              mutations: prev.mutations + (message.data?.edge_stats?.mutation_count || 0),
-              replications: prev.replications + (message.data?.edge_stats?.replication_count || 0),
-            }));
+            const data = message.data || {};
+            const knowledgeGraph = data.knowledge_graph || {};
+            const edgeStats = data.edge_stats || {};
+            setTelemetry((prev) => {
+              const nodeCount = typeof knowledgeGraph.node_count === 'number' ? knowledgeGraph.node_count : prev.nodes;
+              const mutationIncrement = typeof edgeStats.mutation_count === 'number' ? edgeStats.mutation_count : 0;
+              const replicationIncrement = typeof edgeStats.replication_count === 'number' ? edgeStats.replication_count : 0;
+              return {
+                events: prev.events + 1,
+                nodes: Math.max(prev.nodes, nodeCount),
+                mutations: prev.mutations + mutationIncrement,
+                replications: prev.replications + replicationIncrement,
+              };
+            });
           }
         };
 
@@ -324,23 +355,26 @@
           return 'Corrupted';
         };
 
-        const averageMutation = graphData?.nodes?.length
+        const averageMutation = graphData && Array.isArray(graphData.nodes) && graphData.nodes.length
           ? graphData.nodes.reduce((acc, node) => acc + (node.mutationScore || 0), 0) / graphData.nodes.length
           : 0;
 
-        const spinner = html`
-          <React.Fragment>
-            <div className="w-5 h-5 border-2 border-amber-200/30 border-t-amber-200 rounded-full animate-spin"></div>
-            Investigating
-          </React.Fragment>
-        `;
-
-        const traceButtonContent = html`
-          <React.Fragment>
-            <${LucideIcon} name="Zap" className="w-5 h-5" />
-            Trace Origin
-          </React.Fragment>
-        `;
+        const renderTraceButton = () => {
+          if (isAnalyzing) {
+            return html`
+              <div className="flex items-center gap-2">
+                <div className="w-5 h-5 border-2 border-amber-200/30 border-t-amber-200 rounded-full animate-spin"></div>
+                <span>Investigating</span>
+              </div>
+            `;
+          }
+          return html`
+            <div className="flex items-center gap-2">
+              <${LucideIcon} name="Zap" className="w-5 h-5" />
+              <span>Trace Origin</span>
+            </div>
+          `;
+        };
 
         const renderGraphGrid = () => {
           if (!graphData) {
@@ -628,7 +662,7 @@
                       disabled=${isAnalyzing || !url}
                       className="px-8 py-4 bg-gradient-to-b from-amber-800 to-amber-900 rounded-sm font-serif uppercase text-sm tracking-wider hover:from-amber-700 hover:to-amber-800 disabled:opacity-50 disabled:cursor-not-allowed transition-all flex items-center gap-2 shadow-lg border border-amber-700/50"
                     >
-                      ${isAnalyzing ? spinner : traceButtonContent}
+                      ${renderTraceButton()}
                     </button>
                   </div>
                 </div>
