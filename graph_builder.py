@@ -14,6 +14,7 @@ from langgraph.graph import StateGraph, END
 from typing import Dict, Any, List
 import google.generativeai as genai
 from dotenv import load_dotenv
+import logging
 
 # --- API and Model Configuration ---
 load_dotenv()
@@ -22,8 +23,10 @@ OFFLINE_MODE = os.getenv("PHYLOS_OFFLINE_MODE", os.getenv("PHYLOS_OFFLINE", "aut
 FORCE_OFFLINE = OFFLINE_MODE in {"1", "true", "yes", "on", "offline", "stub"}
 REQUEST_TIMEOUT = float(os.getenv("PHYLOS_GEMINI_TIMEOUT", "8"))
 
+logger = logging.getLogger("phylos.graph")
+
 if FORCE_OFFLINE:
-    print("--- Offline mode enforced via PHYLOS_OFFLINE flag.")
+    logger.info("Offline mode enforced via PHYLOS_OFFLINE flag.")
 
 USE_GEMINI = bool(GEMINI_API_KEY) and not FORCE_OFFLINE
 
@@ -32,7 +35,7 @@ if USE_GEMINI:
     llm = genai.GenerativeModel('gemini-pro')
 else:
     if not GEMINI_API_KEY:
-        print("!!! GEMINI_API_KEY not found - running in offline stub mode.")
+        logger.warning("GEMINI_API_KEY not found - running in offline stub mode.")
     llm = None
 
 embedding_model = "models/embedding-001"
@@ -78,7 +81,7 @@ def embedder(text: str) -> List[float]:
     if not _gemini_embeddings_available:
         return _stub_embedding(text)
 
-    print(f"--- Embedding content (first 50 chars): '{text[:50]}...'")
+    logger.debug("Embedding content (first 50 chars): '%s...'", text[:50])
     def _call():
         return genai.embed_content(model=embedding_model, content=text, task_type="RETRIEVAL_DOCUMENT")
 
@@ -86,13 +89,13 @@ def embedder(text: str) -> List[float]:
         embedding = _executor.submit(_call).result(timeout=REQUEST_TIMEOUT)
         return embedding['embedding']
     except (TimeoutError, Exception) as e:
-        print(f"!!! ERROR during embedding: {e}. Falling back to offline stub embeddings.")
+        logger.warning("Embedding failed (%s). Falling back to offline vectors.", e)
         _gemini_embeddings_available = False
         return _stub_embedding(text)
 
 def fetch_article_content(url: str) -> Dict[str, Any]:
     """Placeholder for a web scraping and content extraction service (e.g., using BeautifulSoup, Jina Reader)."""
-    print(f"--- Fetching content from URL: {url}")
+    logger.info("Fetching content from URL: %s", url)
     # Dummy content for architectural purposes
     return {
         "id": url,
@@ -103,7 +106,7 @@ def fetch_article_content(url: str) -> Dict[str, Any]:
 
 def extract_links(content: str, base_url: str) -> List[str]:
     """Placeholder for a hyperlink extraction utility."""
-    print(f"--- Extracting links from content...")
+    logger.debug("Extracting links from content.")
     import re
     urls = re.findall(r'https?://[^\s,"]+', content)
     return urls[:2] # Limit branching factor
@@ -118,7 +121,7 @@ def calculate_semantic_drift(vec1: List[float], vec2: List[float]) -> float:
     similarity = np.dot(vec1, vec2) / (np.linalg.norm(vec1) * np.linalg.norm(vec2))
     # We want drift, which is 1 - similarity
     drift = 1.0 - similarity
-    print(f"--- Calculated semantic drift: {drift}")
+    logger.debug("Calculated semantic drift: %s", drift)
     return drift
 
 def summarize_mutation(parent_content: str, child_content: str) -> str:
@@ -127,7 +130,7 @@ def summarize_mutation(parent_content: str, child_content: str) -> str:
     if not _gemini_summaries_available or llm is None:
         return _stub_summary(parent_content, child_content)
 
-    print("--- Generating mutation summary with LLM...")
+    logger.info("Generating mutation summary with LLM.")
     prompt = f"""
     Analyze the semantic difference between the two following texts.
     PARENT TEXT:
@@ -151,7 +154,7 @@ def summarize_mutation(parent_content: str, child_content: str) -> str:
         response = _executor.submit(_call).result(timeout=REQUEST_TIMEOUT)
         return response.text
     except (TimeoutError, Exception) as e:
-        print(f"!!! ERROR during LLM summary generation: {e}. Falling back to offline summary.")
+        logger.warning("LLM summary generation failed (%s). Falling back to offline summary.", e)
         _gemini_summaries_available = False
         return _stub_summary(parent_content, child_content)
 
@@ -162,7 +165,7 @@ def node_acquire(state: "GraphState") -> Dict[str, Any]:
     """
     Acquires the next article from the traversal queue.
     """
-    print(">>> In Node: Acquire")
+    logger.info("Node: Acquire")
     queue = list(state["traversal_queue"])
     url, parent_id, depth = queue.pop(0)
 
@@ -185,7 +188,7 @@ def node_sequence(state: "GraphState") -> Dict[str, Any]:
     """
     Compares the current article to its parent to detect semantic mutations.
     """
-    print(">>> In Node: Sequence")
+    logger.info("Node: Sequence")
     current_article = state["current_article"]
     parent_id = state["parent_article_id"]
     knowledge_graph = state["knowledge_graph"]
@@ -201,7 +204,7 @@ def node_sequence(state: "GraphState") -> Dict[str, Any]:
     else:
         parent_article = knowledge_graph["nodes"].get(parent_id)
         if not parent_article:
-            print(f"!!! ERROR: Parent article {parent_id} not found in knowledge graph.")
+            logger.error("Parent article %s not found in knowledge graph.", parent_id)
             return {}
         drift_score = calculate_semantic_drift(parent_article["embedding"], current_article["embedding"])
         summary = summarize_mutation(parent_article["content"], current_article["content"])
@@ -210,7 +213,7 @@ def node_sequence(state: "GraphState") -> Dict[str, Any]:
     MUTATION_THRESHOLD = 0.3 # Adjusted for real embeddings
 
     relation_type = "Mutation" if drift_score > MUTATION_THRESHOLD else "Replication"
-    print(f"--- Relation to parent: {relation_type} (Score: {drift_score})")
+    logger.debug("Relation to parent: %s (Score: %s)", relation_type, drift_score)
 
     new_edge = {
         "source": parent_id,
@@ -233,16 +236,16 @@ def node_branch(state: "GraphState") -> Dict[str, Any]:
     """
     Extracts new hyperlinks to continue the traversal.
     """
-    print(">>> In Node: Branch")
+    logger.info("Node: Branch")
     current_article = state["current_article"]
     current_depth = 0 if not current_article else current_article.get("depth", 0)
 
     if current_depth >= state["max_depth"]:
-        print(f"--- Max depth ({state['max_depth']}) reached. Halting branching.")
+        logger.info("Max depth (%s) reached. Halting branching.", state["max_depth"])
         return {}
 
     new_links = extract_links(current_article["content"], current_article["id"])
-    print(f"--- Found {len(new_links)} new links to explore.")
+    logger.info("Found %s new links to explore.", len(new_links))
     
     new_depth = current_depth + 1
     next_level_queue = [(link, current_article["id"], new_depth) for link in new_links]
@@ -259,18 +262,18 @@ def should_continue(state: "GraphState") -> str:
     """
     Determines whether to continue the traversal or end.
     """
-    print(">>> In Control Node: Should Continue?")
+    logger.info("Control Node: Should Continue?")
     if not state["traversal_queue"]:
-        print("--- Queue is empty. Ending graph traversal.")
+        logger.info("Queue empty. Ending traversal.")
         return END
     
     # Check depth of the *next* item without removing it
     _, _, next_depth = state["traversal_queue"][0]
     if next_depth > state["max_depth"]:
-        print(f"--- Next item in queue (depth {next_depth}) exceeds max depth ({state['max_depth']}). Ending.")
+        logger.info("Next queue depth %s exceeds max depth %s. Ending.", next_depth, state["max_depth"])
         return END
         
-    print("--- Queue is not empty and depth is within limits. Continuing.")
+    logger.info("Queue not empty and depth within limits. Continuing.")
     return "acquire"
 
 # --- Graph Assembly ---
@@ -303,6 +306,6 @@ try:
     graph_image = app.get_graph().draw_mermaid_png()
     with open("/home/abtin/Phylos/graph_visualization.png", "wb") as f:
         f.write(graph_image)
-    print("--- Graph visualization saved to graph_visualization.png")
+    logger.info("Graph visualization saved to graph_visualization.png")
 except Exception as e:
-    print(f"Could not draw graph: {e}. Please ensure graphviz and its dependencies are installed.")
+    logger.warning("Could not draw graph visualization: %s", e)

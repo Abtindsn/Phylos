@@ -2,10 +2,29 @@
 # FastAPI server for the Narrative DNA Sequencer.
 # Provides a WebSocket endpoint so clients can stream traversal events.
 
+import os
 import json
+import logging
 import uvicorn
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse
+
+# --- Logging Configuration ---
+LOG_LEVEL = os.getenv("PHYLOS_LOG_LEVEL", "INFO").upper()
+LOG_FILE = os.getenv("PHYLOS_LOG_FILE")
+LOG_FORMAT = "%(asctime)s [%(levelname)s] %(name)s - %(message)s"
+handlers = [logging.StreamHandler()]
+if LOG_FILE:
+    log_dir = os.path.dirname(LOG_FILE)
+    if log_dir:
+        try:
+            os.makedirs(log_dir, exist_ok=True)
+        except (FileNotFoundError, OSError):
+            pass
+    handlers.append(logging.FileHandler(LOG_FILE))
+
+logging.basicConfig(level=LOG_LEVEL, format=LOG_FORMAT, handlers=handlers)
+logger = logging.getLogger("phylos.server")
 
 # --- Local Imports ---
 from state import GraphState, InitialArticleRequest
@@ -602,17 +621,21 @@ async def websocket_endpoint(websocket: WebSocket):
     """
     The main WebSocket endpoint for streaming graph analysis events.
     """
+    logger.info("WebSocket connection attempt from %s", websocket.client)
     await websocket.accept()
     try:
         # 1. Receive the initial request from the client
         initial_data = await websocket.receive_json()
         request = InitialArticleRequest(**initial_data)
+        logger.info("WebSocket trace request received: %s", request.model_dump())
         
         await websocket.send_json({"status": "info", "message": f"Received request to trace: {request.start_url}"})
+        logger.debug("Acknowledgement sent to client.")
 
         # 2. Prepare the initial state for the graph
         patient_zero_content = fetch_article_content(request.start_url)
         global_context_embedding = embedder(patient_zero_content["content"])
+        logger.info("Prepared patient zero content for %s", request.start_url)
 
         initial_state: GraphState = {
             "traversal_queue": [(request.start_url, None, 0)], # (url, parent_id, depth)
@@ -622,9 +645,19 @@ async def websocket_endpoint(websocket: WebSocket):
             "parent_article_id": None,
             "max_depth": request.max_depth,
         }
+        logger.debug(
+            "Initial graph state seeded: queue=%s max_depth=%s",
+            initial_state["traversal_queue"],
+            request.max_depth,
+        )
 
         # 3. Stream the graph execution events back to the client
-        async for event in app.astream_events(initial_state, version="v1", config={"recursion_limit": GRAPH_RECURSION_LIMIT}):
+        async for event in app.astream_events(
+            initial_state,
+            version="v1",
+            config={"recursion_limit": GRAPH_RECURSION_LIMIT},
+        ):
+            logger.debug("Streaming event to client: %s", event)
             await websocket.send_json({
                 "event": event["event"],
                 "name": event["name"],
@@ -632,17 +665,18 @@ async def websocket_endpoint(websocket: WebSocket):
             })
         
         await websocket.send_json({"status": "info", "message": "Graph traversal complete."})
+        logger.info("WebSocket trace completed successfully for %s", request.start_url)
 
     except WebSocketDisconnect:
-        print("Client disconnected.")
+        logger.warning("Client disconnected prematurely.")
     except Exception as e:
         error_message = f"An error occurred: {type(e).__name__} - {e}"
-        print(error_message)
+        logger.exception("Unhandled exception during WebSocket trace: %s", error_message)
         await websocket.send_json({"status": "error", "message": error_message})
     finally:
         if websocket.client_state.name != 'DISCONNECTED':
             await websocket.close()
-        print("WebSocket connection closed.")
+        logger.info("WebSocket connection closed for client %s", websocket.client)
 
 # --- Main Execution ---
 if __name__ == "__main__":
