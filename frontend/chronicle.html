@@ -174,11 +174,11 @@
           };
         }, []);
 
-        useEffect(() => {
-          if (window.lucide && typeof window.lucide.createIcons === 'function') {
-            window.lucide.createIcons();
-          }
-        });
+        // useEffect(() => {
+        //   if (window.lucide && typeof window.lucide.createIcons === 'function') {
+        //     window.lucide.createIcons();
+        //   }
+        // });
 
         const appendMessage = (role, text) => {
           setChatMessages((prev) => [...prev, { role, text }]);
@@ -596,6 +596,20 @@
                       </div>
                     )}
                   </div>
+                </div>
+              )}
+
+              {isAnalyzing && (
+                <div className="text-center py-20">
+                  <div className="w-32 h-32 bg-amber-950/20 border-4 border-double border-amber-900/40 flex items-center justify-center mx-auto mb-6">
+                    <LucideIcon name="Newspaper" className="w-16 h-16 text-amber-700/40 animate-pulse" />
+                  </div>
+                  <h3 className="text-2xl font-serif text-amber-200/70 mb-3">
+                    Investigating...
+                  </h3>
+                  <p className="text-amber-400/50 text-sm font-serif italic max-w-md mx-auto">
+                    Tracing the narrative evolution through the shadows of the information age...
+                  </p>
                 </div>
               )}
 
