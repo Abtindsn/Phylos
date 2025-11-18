@@ -612,7 +612,10 @@
         );
       }
 
-      ReactDOM.createRoot(document.getElementById('root')).render(<PhylosUI />);
+      const rootElement = document.getElementById('root');
+      if (rootElement) {
+        ReactDOM.render(<PhylosUI />, rootElement);
+      }
     </script>
   </body>
 </html>
