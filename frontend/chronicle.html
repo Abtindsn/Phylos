@@ -88,6 +88,8 @@
     <div id="root"></div>
 
     <script>
+      (function () {
+        try {
       const { useState, useEffect, useRef } = React;
       const html = htm.bind(React.createElement);
 
@@ -733,6 +735,16 @@
       if (root) {
         ReactDOM.render(html`<${PhylosUI} />`, root);
       }
+        } catch (error) {
+          const root = document.getElementById('root');
+          if (root) {
+            root.innerHTML = `<div style="padding:16px;color:#fee;background:#7a0f0f;border:2px solid #ff5b5b;font-family:monospace;">
+              UI failed to load:<br>${error.message}
+            </div>`;
+          }
+          console.error("Phylos Chronicle UI error:", error);
+        }
+      })();
     </script>
   </body>
 </html>
