@@ -373,7 +373,7 @@
           if (children.length === 1) {
             return children[0];
           }
-          return createElement.apply(null, [React.Fragment, null].concat(children));
+          return createElement.apply(null, ["div", null].concat(children));
         };
       }
 
