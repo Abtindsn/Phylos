@@ -27,9 +27,61 @@ logging.basicConfig(level=LOG_LEVEL, format=LOG_FORMAT, handlers=handlers)
 logger = logging.getLogger("phylos.server")
 
 # --- Helpers ---
-MAX_LIST_ITEMS = int(os.getenv("PHYLOS_EVENT_MAX_ITEMS", "8"))
-MAX_STRING_LENGTH = int(os.getenv("PHYLOS_EVENT_MAX_STRING", "240"))
-MAX_RECURSION_DEPTH = int(os.getenv("PHYLOS_EVENT_MAX_DEPTH", "4"))
+MAX_LIST_ITEMS = int(os.getenv("PHYLOS_EVENT_MAX_ITEMS", "6"))
+MAX_STRING_LENGTH = int(os.getenv("PHYLOS_EVENT_MAX_STRING", "160"))
+MAX_RECURSION_DEPTH = int(os.getenv("PHYLOS_EVENT_MAX_DEPTH", "3"))
+
+def _shorten(text: str, limit: int) -> str:
+    if len(text) <= limit:
+        return text
+    return text[:limit] + "…"
+
+def _brief_article(article: dict | None) -> dict | None:
+    if not isinstance(article, dict):
+        return article
+    return {
+        "id": article.get("id"),
+        "depth": article.get("depth"),
+        "timestamp": article.get("timestamp"),
+        "author": article.get("author"),
+        "content_preview": _shorten(article.get("content", ""), MAX_STRING_LENGTH),
+    }
+
+def _summarize_event_data(data):
+    if not isinstance(data, dict):
+        return data
+    summary = dict(data)
+    if "knowledge_graph" in summary and isinstance(summary["knowledge_graph"], dict):
+        kg = summary["knowledge_graph"]
+        nodes = kg.get("nodes") or {}
+        edges = kg.get("edges") or []
+        summary["knowledge_graph"] = {
+            "node_count": len(nodes),
+            "edge_count": len(edges),
+            "sample_nodes": list(nodes.keys())[:MAX_LIST_ITEMS],
+            "sample_edges": [
+                {
+                    "source": edge.get("source"),
+                    "target": edge.get("target"),
+                    "relation": edge.get("attributes", {}).get("relation_type"),
+                }
+                for edge in edges[:MAX_LIST_ITEMS]
+            ],
+        }
+    if "current_article" in summary:
+        summary["current_article"] = _brief_article(summary["current_article"])
+    if "knowledge_graph" in summary and isinstance(summary["knowledge_graph"], dict):
+        kg = summary["knowledge_graph"]
+        if "sample_nodes" in kg:
+            kg["sample_nodes"] = kg["sample_nodes"][:MAX_LIST_ITEMS]
+    if "global_context" in summary and isinstance(summary["global_context"], list):
+        summary["global_context"] = {
+            "length": len(summary["global_context"]),
+            "preview": summary["global_context"][:MAX_LIST_ITEMS],
+        }
+    if "traversal_queue" in summary and isinstance(summary["traversal_queue"], list):
+        summary["traversal_queue"] = summary["traversal_queue"][:MAX_LIST_ITEMS]
+    return summary
 
 def _sanitize_payload(value, depth=0):
     """Trim large numeric arrays and long strings before streaming to the UI."""
@@ -697,7 +749,8 @@ async def websocket_endpoint(websocket: WebSocket):
                 event.get("name"),
                 event_keys,
             )
-            sanitized_data = _sanitize_payload(event.get("data"))
+            summarized_data = _summarize_event_data(event.get("data"))
+            sanitized_data = _sanitize_payload(summarized_data)
             await websocket.send_json({
                 "event": event["event"],
                 "name": event["name"],
