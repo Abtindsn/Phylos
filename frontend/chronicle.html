@@ -403,33 +403,38 @@
         const icon = window.lucide && window.lucide.icons && window.lucide.icons[name];
         if (!icon) return null;
 
-        const normalizeChildren = (children) => {
-          if (!children) {
-            return [];
-          }
-          return Array.isArray(children) ? children : [children];
-        };
-
         const renderNode = (node, key) => {
-          if (!node) return null;
-          const tuple = Array.isArray(node) ? node : [node];
-          const tag = tuple[0];
-          const attrs = tuple[1] || {};
-          const childNodes = normalizeChildren(tuple[2]);
-          return React.createElement(
-            tag,
-            { ...attrs, key, stroke: 'currentColor', fill: 'none' },
-            childNodes.map((child, index) => renderNode(child, `${key}-${index}`))
-          );
+          if (node === null || node === undefined || node === false) {
+            return null;
+          }
+          if (typeof node === 'string' || typeof node === 'number') {
+            return node;
+          }
+          if (Array.isArray(node)) {
+            const [tag, attrs = {}, ...children] = node;
+            const renderedChildren = children
+              .map((child, index) => renderNode(child, `${key}-${index}`))
+              .filter((child) => child !== null && child !== undefined);
+            return React.createElement(
+              tag,
+              { ...attrs, key, stroke: 'currentColor', fill: 'none' },
+              renderedChildren.length ? renderedChildren : undefined
+            );
+          }
+          if (typeof node === 'object') {
+            return React.createElement('path', { ...node, key, stroke: 'currentColor', fill: 'none' });
+          }
+          return null;
         };
 
-        const tag = icon[0];
-        const attrs = icon[1] || {};
-        const children = normalizeChildren(icon[2]);
+        const [tag, attrs = {}, ...children] = icon;
+        const renderedChildren = children
+          .map((child, index) => renderNode(child, index))
+          .filter((child) => child !== null && child !== undefined);
         return React.createElement(
           tag,
           { ...attrs, className, stroke: 'currentColor', fill: 'none' },
-          children.map((child, index) => renderNode(child, index))
+          renderedChildren.length ? renderedChildren : undefined
         );
       };
 
