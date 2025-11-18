@@ -8,6 +8,7 @@ from typing import Dict, Any, List
 import json
 import logging
 from pathlib import Path
+import difflib
 import uvicorn
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException
 from fastapi.responses import HTMLResponse
@@ -308,9 +309,37 @@ def _origin_similarity(origin_embedding, target_embedding):
     except Exception:
         return None
 
+def _fallback_origin_summary(origin_text: str, node_text: str) -> str:
+    matcher = difflib.SequenceMatcher(None, origin_text, node_text)
+    overlap = matcher.quick_ratio()
+    longest = matcher.find_longest_match(0, len(origin_text), 0, len(node_text))
+    snippet = node_text[longest.b:longest.b + min(220, longest.size)]
+    snippet = snippet or node_text[:220]
+    return (
+        f"Similarity score {overlap:.2f} vs. origin. "
+        f"Origin focuses on \"{origin_text[:140].strip()}...\" whereas this article "
+        f"introduces or emphasizes \"{snippet.strip()}\"."
+    )
+
+def _summarize_origin_difference(origin_text: str, node_text: str) -> str:
+    if not origin_text or not node_text:
+        return ""
+    fallback = _fallback_origin_summary(origin_text, node_text)
+    prompt = (
+        "Compare the ORIGINAL STORY to the ARTICLE that followed it. "
+        "Write 3 bullet-style sentences (but return plain text) describing: "
+        "(1) what the original emphasized, (2) what new detail/tone/angle the article adds, "
+        "and (3) whether the article reinforces, softens, or contradicts the original premise. "
+        "Mention both pieces explicitly and avoid speculation beyond the provided text.\n\n"
+        f"ORIGINAL STORY:\n{origin_text[:3000]}\n\nARTICLE:\n{node_text[:3000]}"
+    )
+    return generate_origin_insight(prompt, fallback)
+
 def _build_node_snapshots(
     graph: Dict[str, Any],
     origin_embedding: List[float] | None = None,
+    origin_content: str | None = None,
+    origin_url: str | None = None,
 ) -> List[Dict[str, Any]]:
     edges = graph.get("edges") or []
     score_map: Dict[str, float] = {}
@@ -323,6 +352,7 @@ def _build_node_snapshots(
     for node_id, payload in (graph.get("nodes") or {}).items():
         resolved_id = payload.get("id", node_id)
         similarity = _origin_similarity(origin_embedding, payload.get("embedding"))
+        difference = 1.0 - similarity if similarity is not None else None
         nodes.append({
             "id": resolved_id,
             "content": payload.get("content", ""),
@@ -332,7 +362,22 @@ def _build_node_snapshots(
             "mutation_score": score_map.get(resolved_id, score_map.get(node_id, 0.0)),
             "outbound_links": payload.get("outbound_links") or [],
             "origin_similarity": similarity,
+            "origin_difference": difference,
+            "origin_summary": None,
         })
+
+    origin_text = (origin_content or "").strip()
+    if origin_text:
+        for entry in nodes:
+            if not entry.get("content"):
+                continue
+            if origin_url and entry["id"] == origin_url:
+                entry["origin_summary"] = "Reference article supplied as the starting point."
+                continue
+            try:
+                entry["origin_summary"] = _summarize_origin_difference(origin_text, entry["content"])
+            except Exception:
+                entry["origin_summary"] = _fallback_origin_summary(origin_text, entry["content"])
     return nodes
 
 # --- Local Imports ---
@@ -343,6 +388,7 @@ from graph_builder import (
     fetch_article_content,
     GRAPH_RECURSION_LIMIT,
     generate_text_response,
+    generate_origin_insight,
     calculate_semantic_drift,
 )
 
@@ -1172,7 +1218,12 @@ async def session_graph(session_id: str):
 
     graph = context.get("knowledge_graph") or {"nodes": {}, "edges": []}
     origin_info = context.get("origin") or {}
-    node_snapshots = _build_node_snapshots(graph, origin_embedding=origin_info.get("embedding"))
+    node_snapshots = _build_node_snapshots(
+        graph,
+        origin_embedding=origin_info.get("embedding"),
+        origin_content=origin_info.get("content"),
+        origin_url=origin_info.get("url"),
+    )
     edge_snapshots = _build_edge_snapshots(graph.get("edges") or [])
     stats = {
         "nodes": len(node_snapshots),
@@ -1224,6 +1275,7 @@ async def websocket_endpoint(websocket: WebSocket):
         session_context["origin"] = {
             "url": request.start_url,
             "embedding": global_context_embedding,
+            "content": patient_zero_content["content"],
         }
         logger.debug(
             "Initial graph state seeded: queue=%s max_depth=%s",

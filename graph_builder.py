@@ -29,6 +29,7 @@ OFFLINE_MODE = os.getenv("PHYLOS_OFFLINE_MODE", os.getenv("PHYLOS_OFFLINE", "aut
 FORCE_OFFLINE = OFFLINE_MODE in {"1", "true", "yes", "on", "offline", "stub"}
 REQUEST_TIMEOUT = float(os.getenv("PHYLOS_GEMINI_TIMEOUT", "8"))
 HOST_VISIT_LIMIT = int(os.getenv("PHYLOS_MAX_VISITS_PER_HOST", "8"))
+ORIGIN_INSIGHT_MODEL_NAME = os.getenv("PHYLOS_ORIGIN_INSIGHT_MODEL", "gemini-2.0-pro")
 HTTP_HEADERS = {
     "User-Agent": os.getenv(
         "PHYLOS_HTTP_USER_AGENT",
@@ -80,16 +81,22 @@ USE_GEMINI = bool(GEMINI_API_KEY) and not FORCE_OFFLINE
 if USE_GEMINI:
     genai.configure(api_key=GEMINI_API_KEY)
     llm = genai.GenerativeModel('gemini-pro')
+    try:
+        origin_llm = genai.GenerativeModel(ORIGIN_INSIGHT_MODEL_NAME)
+    except Exception:
+        origin_llm = None
 else:
     if not GEMINI_API_KEY:
         logger.warning("GEMINI_API_KEY not found - running in offline stub mode.")
     llm = None
+    origin_llm = None
 
 embedding_model = "models/embedding-001"
 GRAPH_RECURSION_LIMIT = int(os.getenv("PHYLOS_RECURSION_LIMIT", "500"))
 _executor = ThreadPoolExecutor(max_workers=2)
 _gemini_embeddings_available = USE_GEMINI
 _gemini_text_available = USE_GEMINI
+_gemini_origin_available = USE_GEMINI
 STUB_EMBED_DIM = 128
 
 def _now_iso() -> str:
@@ -420,6 +427,23 @@ def generate_text_response(prompt: str, fallback: str) -> str:
     except (TimeoutError, Exception) as e:
         logger.warning("LLM text generation failed (%s). Falling back to stub.", e)
         _gemini_text_available = False
+        return fallback
+
+def generate_origin_insight(prompt: str, fallback: str) -> str:
+    """Uses a higher-context Gemini model for origin-difference analysis."""
+    global _gemini_origin_available
+    if origin_llm is None or not _gemini_origin_available:
+        return fallback
+
+    def _call():
+        return origin_llm.generate_content(prompt)
+
+    try:
+        response = _executor.submit(_call).result(timeout=REQUEST_TIMEOUT)
+        return response.text
+    except (TimeoutError, Exception) as e:
+        logger.warning("Origin insight generation failed (%s). Falling back to stub.", e)
+        _gemini_origin_available = False
         return fallback
 
 
