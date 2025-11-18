@@ -422,7 +422,12 @@
             );
           }
           if (typeof node === 'object') {
-            return React.createElement('path', { ...node, key, stroke: 'currentColor', fill: 'none' });
+            const entries = Object.entries(node);
+            if (entries.length === 0) {
+              return null;
+            }
+            const [tag, attrs] = entries[0];
+            return React.createElement(tag, { ...attrs, key, stroke: 'currentColor', fill: 'none' });
           }
           return null;
         };
