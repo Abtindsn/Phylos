@@ -657,7 +657,13 @@ async def websocket_endpoint(websocket: WebSocket):
             version="v1",
             config={"recursion_limit": GRAPH_RECURSION_LIMIT},
         ):
-            logger.debug("Streaming event to client: %s", event)
+            event_keys = list((event.get("data") or {}).keys())
+            logger.debug(
+                "Streaming event: event=%s name=%s data_keys=%s",
+                event.get("event"),
+                event.get("name"),
+                event_keys,
+            )
             await websocket.send_json({
                 "event": event["event"],
                 "name": event["name"],
