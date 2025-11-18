@@ -134,6 +134,12 @@
           return null;
         }
 
+        const REACT_ELEMENT_TYPE = typeof Symbol === "function" && Symbol.for ? Symbol.for("react.element") : null;
+
+        function isReactElement(value) {
+          return value && typeof value === "object" && value.$$typeof === REACT_ELEMENT_TYPE;
+        }
+
         function appendChild(list, child) {
           if (child === null || child === undefined || child === false) {
             return;
@@ -141,6 +147,9 @@
           if (Array.isArray(child)) {
             child.forEach((entry) => appendChild(list, entry));
             return;
+          }
+          if (typeof child === "object" && !isReactElement(child)) {
+            throw new Error("Unsupported template child: " + JSON.stringify(child));
           }
           list.push(child);
         }
