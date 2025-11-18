@@ -399,58 +399,14 @@
 
       const html = createHtmlRenderer(React.createElement);
 
-      const LucideIcon = ({ name, className }) => {
-        const icon = window.lucide && window.lucide.icons && window.lucide.icons[name];
-        if (!icon) return null;
+      const iconSlug = (name) =>
+        name
+          .replace(/([a-z0-9])([A-Z])/g, '$1-$2')
+          .replace(/([A-Za-z])(\d+)/g, '$1-$2')
+          .toLowerCase();
 
-        const nodeList = Array.isArray(icon)
-          ? icon
-          : Array.isArray(icon.iconNode)
-          ? icon.iconNode
-          : [];
-
-        const renderNode = (node, key) => {
-          if (!node) {
-            return null;
-          }
-          if (Array.isArray(node)) {
-            const [tag, attrs = {}] = node;
-            return React.createElement(tag, { ...attrs, key });
-          }
-          if (typeof node === 'object') {
-            const entries = Object.entries(node);
-            if (!entries.length) {
-              return null;
-            }
-            const [tag, attrs = {}] = entries[0];
-            return React.createElement(tag, { ...attrs, key });
-          }
-          return null;
-        };
-
-        const svgChildren = nodeList
-          .map((child, index) => renderNode(child, `${name}-${index}`))
-          .filter((child) => child !== null);
-
-        return React.createElement(
-          'svg',
-          {
-            xmlns: 'http://www.w3.org/2000/svg',
-            width: 24,
-            height: 24,
-            viewBox: '0 0 24 24',
-            fill: 'none',
-            stroke: 'currentColor',
-            strokeWidth: 2,
-            strokeLinecap: 'round',
-            strokeLinejoin: 'round',
-            className,
-          },
-          svgChildren.length ? svgChildren : null
-        );
-      };
-
-      const iconElement = (name, className) => React.createElement(LucideIcon, { name, className });
+      const iconElement = (name, className) =>
+        React.createElement('i', { 'data-lucide': iconSlug(name), className });
 
       const formatTimestamp = (timestamp) => {
         if (!timestamp) return 'Unknown';
@@ -544,6 +500,12 @@
             }
           };
         }, []);
+
+        useEffect(() => {
+          if (window.lucide && typeof window.lucide.createIcons === 'function') {
+            window.lucide.createIcons();
+          }
+        });
 
         const appendMessage = (role, text) => {
           setChatMessages((prev) => [...prev, { role, text }]);
