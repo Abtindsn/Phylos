@@ -7,6 +7,7 @@ import uuid
 from typing import Dict, Any, List
 import json
 import logging
+from pathlib import Path
 import uvicorn
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException
 from fastapi.responses import HTMLResponse
@@ -28,6 +29,8 @@ if LOG_FILE:
 
 logging.basicConfig(level=LOG_LEVEL, format=LOG_FORMAT, handlers=handlers)
 logger = logging.getLogger("phylos.server")
+BASE_DIR = Path(__file__).resolve().parent
+REACT_HTML = (BASE_DIR / "frontend" / "chronicle.html").read_text()
 
 # --- Helpers ---
 MAX_LIST_ITEMS = int(os.getenv("PHYLOS_EVENT_MAX_ITEMS", "6"))
@@ -274,6 +277,47 @@ def _extract_edge_updates(raw_data: Any) -> List[Dict[str, Any]]:
             updates.extend(_collect_edges_from_section(section))
     return updates
 
+def _clean_score(value):
+    try:
+        return float(value)
+    except Exception:
+        return value
+
+def _build_edge_snapshots(edges: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    cleaned = []
+    for edge in edges or []:
+        attr = edge.get("attributes", {})
+        cleaned.append({
+            "source": edge.get("source"),
+            "target": edge.get("target"),
+            "attributes": {
+                "relation_type": attr.get("relation_type"),
+                "mutation_score": _clean_score(attr.get("mutation_score")),
+                "summary": attr.get("summary"),
+            }
+        })
+    return cleaned
+
+def _build_node_snapshots(graph: Dict[str, Any]) -> List[Dict[str, Any]]:
+    edges = graph.get("edges") or []
+    score_map: Dict[str, float] = {}
+    for edge in edges:
+        target = edge.get("target")
+        if target:
+            score_map[target] = _clean_score(edge.get("attributes", {}).get("mutation_score")) or 0.0
+
+    nodes = []
+    for node_id, payload in (graph.get("nodes") or {}).items():
+        nodes.append({
+            "id": payload.get("id", node_id),
+            "content": payload.get("content", ""),
+            "author": payload.get("author"),
+            "timestamp": payload.get("timestamp"),
+            "depth": payload.get("depth", 0),
+            "mutation_score": score_map.get(payload.get("id", node_id), score_map.get(node_id, 0.0)),
+        })
+    return nodes
+
 # --- Local Imports ---
 from state import GraphState, InitialArticleRequest
 from graph_builder import app, embedder, fetch_article_content, GRAPH_RECURSION_LIMIT, generate_text_response
@@ -288,8 +332,8 @@ api = FastAPI(
     version="0.1.0",
 )
 
-# Single-page console to interact with the agent
-HTML = """
+# Single-page console (classic) to interact with the agent
+CLASSIC_HTML = """
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -1072,8 +1116,13 @@ HTML = """
 
 @api.get("/")
 async def get():
-    """Serves a simple HTML page to interact with the WebSocket."""
-    return HTMLResponse(HTML)
+    """Serves the modern React-based UI."""
+    return HTMLResponse(REACT_HTML)
+
+@api.get("/classic")
+async def get_classic():
+    """Serves the classic console UI."""
+    return HTMLResponse(CLASSIC_HTML)
 
 @api.post("/chat")
 async def chat_endpoint(request: ChatRequest):
@@ -1089,6 +1138,28 @@ async def chat_endpoint(request: ChatRequest):
     reply = _generate_chat_reply(context["summary"], history, request.message)
     history.append({"role": "assistant", "content": reply})
     return {"reply": reply}
+
+@api.get("/session/{session_id}/graph")
+async def session_graph(session_id: str):
+    """Returns the accumulated knowledge graph for a completed session."""
+    context = SESSION_CONTEXTS.get(session_id)
+    if not context:
+        raise HTTPException(status_code=404, detail="Session not found.")
+
+    graph = context.get("knowledge_graph") or {"nodes": {}, "edges": []}
+    node_snapshots = _build_node_snapshots(graph)
+    edge_snapshots = _build_edge_snapshots(graph.get("edges") or [])
+    stats = {
+        "nodes": len(node_snapshots),
+        "edges": len(edge_snapshots),
+        "mutations": sum(1 for edge in edge_snapshots if edge["attributes"].get("relation_type") == "Mutation"),
+        "replications": sum(1 for edge in edge_snapshots if edge["attributes"].get("relation_type") == "Replication"),
+    }
+    return {
+        "nodes": node_snapshots,
+        "edges": edge_snapshots,
+        "stats": stats,
+    }
 
 
 @api.websocket("/ws/dna-stream")
