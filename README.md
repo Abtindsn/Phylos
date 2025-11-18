@@ -53,6 +53,10 @@ This guide provides a complete, copy-paste-friendly set of commands to get the a
     # .env
     GEMINI_API_KEY="PASTE_YOUR_GEMINI_API_KEY_HERE"
     PHYLOS_OFFLINE_MODE=0   # keep at 0 to fetch real-world sites
+    # Optional: stop the crawler from looping endlessly on the same domain
+    # PHYLOS_MAX_VISITS_PER_HOST=8
+    # Optional: limit how many referenced URLs per article we surface (default 40)
+    # PHYLOS_REFERENCE_PREVIEW_LIMIT=40
     ```
 
     > **Important:** Setting `PHYLOS_OFFLINE_MODE=1` forces the crawler to use stubbed
@@ -69,12 +73,24 @@ This guide provides a complete, copy-paste-friendly set of commands to get the a
     docker build -t phylos-app . && docker run --env-file .env -p 8000:8000 phylos-app
     ```
 
-    > ⚠️ **Real-web crawling vs. stub mode**
-    >
-    > The command above uses whatever value you placed in `.env`. Do **not** add
-    > `-e PHYLOS_OFFLINE_MODE=1` unless you explicitly want the offline stubs (the
-    > ones that emit `http://example.com/...`). When the variable is `0`, Phylos will
-    > fetch the actual article content and outbound links from the live site.
+> ⚠️ **Real-web crawling vs. stub mode**
+>
+> The command above uses whatever value you placed in `.env`. Do **not** add
+> `-e PHYLOS_OFFLINE_MODE=1` unless you explicitly want the offline stubs (the
+> ones that emit `http://example.com/...`). When the variable is `0`, Phylos will
+> fetch the actual article content and outbound links from the live site.
+>
+> You can still control the traversal depth per run. The Chronicle UI now
+> exposes a **Depth Limit** dropdown (1–6 hops, default 3) next to the URL
+> field, so you no longer have to hand-edit the WebSocket payload. If you're
+> scripting against the WebSocket endpoint directly, continue to include a
+> `max_depth` in the payload:
+>
+> ```json
+> { "start_url": "https://www.cnn.com/...", "max_depth": 2 }
+> ```
+>
+> When omitted, the backend falls back to the server default (3).
 
     The FastAPI server will now be running and accessible at `http://localhost:8000`. You can connect to the WebSocket at `ws://localhost:8000/ws/dna-stream`.
 

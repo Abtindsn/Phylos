@@ -16,7 +16,7 @@ import google.generativeai as genai
 from dotenv import load_dotenv
 import logging
 from datetime import datetime, timezone
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlparse
 
 import requests
 from bs4 import BeautifulSoup
@@ -27,6 +27,7 @@ GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 OFFLINE_MODE = os.getenv("PHYLOS_OFFLINE_MODE", os.getenv("PHYLOS_OFFLINE", "auto")).lower()
 FORCE_OFFLINE = OFFLINE_MODE in {"1", "true", "yes", "on", "offline", "stub"}
 REQUEST_TIMEOUT = float(os.getenv("PHYLOS_GEMINI_TIMEOUT", "8"))
+HOST_VISIT_LIMIT = int(os.getenv("PHYLOS_MAX_VISITS_PER_HOST", "8"))
 HTTP_HEADERS = {
     "User-Agent": os.getenv(
         "PHYLOS_HTTP_USER_AGENT",
@@ -168,30 +169,104 @@ def fetch_article_content(url: str) -> Dict[str, Any]:
     else:
         published = _now_iso()
 
-    # Collect outbound links and append to the text so regex-based extraction can discover them.
+    # Collect outbound links (anchors + canonical/meta references) for downstream extraction.
     outbound_links: List[str] = []
-    for anchor in soup.find_all("a", href=True):
-        absolute = urljoin(url, anchor["href"].strip())
-        if absolute.startswith("http"):
-            outbound_links.append(absolute)
+    seen_links: set[str] = set()
 
+    def _append_link(href: str):
+        if not href:
+            return
+        normalized = href.strip()
+        if not normalized:
+            return
+        absolute = urljoin(url, normalized)
+        if not absolute.startswith("http"):
+            return
+        if absolute in seen_links:
+            return
+        seen_links.add(absolute)
+        outbound_links.append(absolute)
+
+    for anchor in soup.find_all("a", href=True):
+        _append_link(anchor["href"])
+
+    for link_tag in soup.find_all("link", href=True):
+        rels = link_tag.get("rel") or []
+        if isinstance(rels, str):
+            rels = [rels]
+        rel_set = {rel.lower() for rel in rels}
+        if rel_set & {"canonical", "amphtml", "shortlink"}:
+            _append_link(link_tag["href"])
+
+    meta_url_keys = [
+        "og:url",
+        "og:see_also",
+        "twitter:url",
+        "article:publisher",
+        "article:source",
+        "citation_reference",
+    ]
+    for key in meta_url_keys:
+        for attr in ("property", "name"):
+            for tag in soup.find_all("meta", attrs={attr: key}):
+                content = tag.get("content")
+                if content and "http" in content:
+                    _append_link(content)
+
+    prioritized_links: List[str] = []
     if outbound_links:
-        preview = "\n".join(outbound_links[:10])
-        content = f"{content}\n\nReferenced URLs:\n{preview}"
+        base_host = urlparse(url).netloc.lower()
+        off_domain_links: List[str] = []
+        on_domain_links: List[str] = []
+        for link in outbound_links:
+            host = urlparse(link).netloc.lower()
+            if host == base_host:
+                on_domain_links.append(link)
+            else:
+                off_domain_links.append(link)
+        prioritized_links = off_domain_links + on_domain_links
+        max_preview = int(os.getenv("PHYLOS_REFERENCE_PREVIEW_LIMIT", "40"))
+        preview = "\n".join(prioritized_links[:max_preview])
+        if preview:
+            content = f"{content}\n\nReferenced URLs:\n{preview}"
 
     return {
         "id": url,
         "content": f"{title}\n\n{content}",
         "author": author,
         "timestamp": published,
+        "outbound_links": prioritized_links,
     }
 
 def extract_links(content: str, base_url: str) -> List[str]:
-    """Placeholder for a hyperlink extraction utility."""
+    """Extracts outbound links, preferring sources outside the current domain."""
     logger.debug("Extracting links from content.")
     import re
-    urls = re.findall(r'https?://[^\s,"]+', content)
-    return urls[:2] # Limit branching factor
+
+    raw_urls = re.findall(r'https?://[^\s,\)\]\"<>]+', content)
+    seen: set[str] = set()
+    cleaned: List[str] = []
+    for raw in raw_urls:
+        candidate = raw.rstrip(').,;"')
+        if candidate in seen:
+            continue
+        seen.add(candidate)
+        cleaned.append(candidate)
+
+    base_host = urlparse(base_url).netloc
+    off_domain: List[str] = []
+    on_domain: List[str] = []
+    for url in cleaned:
+        host = urlparse(url).netloc
+        if not host:
+            continue
+        if host == base_host:
+            on_domain.append(url)
+        else:
+            off_domain.append(url)
+
+    ordered = off_domain + on_domain
+    return ordered[:4]
 
 def calculate_semantic_drift(vec1: List[float], vec2: List[float]) -> float:
     """Calculates cosine similarity between two vectors."""
@@ -259,6 +334,15 @@ def node_acquire(state: "GraphState") -> Dict[str, Any]:
     article_data["embedding"] = embedder(article_data["content"])
     article_data["depth"] = depth
 
+    visited = list(state.get("visited_urls", []))
+    if url not in visited:
+        visited.append(url)
+
+    host_counts = dict(state.get("host_visit_counts", {}))
+    host = urlparse(url).netloc.lower()
+    if host:
+        host_counts[host] = host_counts.get(host, 0) + 1
+
     return {
         "traversal_queue": queue,
         "current_article": article_data,
@@ -267,7 +351,9 @@ def node_acquire(state: "GraphState") -> Dict[str, Any]:
         "knowledge_graph": {
             "nodes": {article_data["id"]: article_data},
             "edges": []
-        }
+        },
+        "visited_urls": visited,
+        "host_visit_counts": host_counts,
     }
 
 def node_sequence(state: "GraphState") -> Dict[str, Any]:
@@ -330,12 +416,47 @@ def node_branch(state: "GraphState") -> Dict[str, Any]:
         logger.info("Max depth (%s) reached. Halting branching.", state["max_depth"])
         return {}
 
-    new_links = extract_links(current_article["content"], current_article["id"])
+    raw_links = current_article.get("outbound_links") or []
+    if raw_links:
+        new_links = raw_links[:4]  # limit breadth via prioritization
+    else:
+        new_links = extract_links(current_article["content"], current_article["id"])
     logger.info("Found %s new links to explore.", len(new_links))
-    
+
+    visited = set(state.get("visited_urls") or [])
+    existing_queue = list(state["traversal_queue"])
+    queued_urls = {item[0] for item in existing_queue}
+    queued_host_counts: Dict[str, int] = {}
+    for queued_url, _, _ in existing_queue:
+        host = urlparse(queued_url).netloc.lower()
+        if host:
+            queued_host_counts[host] = queued_host_counts.get(host, 0) + 1
+
+    host_counts = dict(state.get("host_visit_counts") or {})
+    filtered_links: List[str] = []
+    for link in new_links:
+        host = urlparse(link).netloc.lower()
+        if not host:
+            continue
+        if link in visited or link in queued_urls:
+            logger.debug("Skipping already seen link: %s", link)
+            continue
+        total_host_visits = host_counts.get(host, 0) + queued_host_counts.get(host, 0)
+        if HOST_VISIT_LIMIT > 0 and total_host_visits >= HOST_VISIT_LIMIT:
+            logger.debug("Host %s reached visit limit (%s). Skipping %s.", host, HOST_VISIT_LIMIT, link)
+            continue
+        filtered_links.append(link)
+        queued_urls.add(link)
+        queued_host_counts[host] = queued_host_counts.get(host, 0) + 1
+
+    if filtered_links:
+        logger.info("Queued %s new unique links after filtering.", len(filtered_links))
+    else:
+        logger.info("No new unique links to queue from this article.")
+
     new_depth = current_depth + 1
-    next_level_queue = [(link, current_article["id"], new_depth) for link in new_links]
-    updated_queue = list(state["traversal_queue"]) + next_level_queue
+    next_level_queue = [(link, current_article["id"], new_depth) for link in filtered_links]
+    updated_queue = existing_queue + next_level_queue
 
     return {
         "traversal_queue": updated_queue,

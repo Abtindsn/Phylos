@@ -59,6 +59,24 @@ def replace_queue(_: List[Tuple[str, str | None, int]], right: List[Tuple[str, s
     """Reducer that always prefers the latest traversal queue."""
     return right
 
+def merge_visited_urls(left: List[str] | None, right: List[str] | None) -> List[str]:
+    """Reducer that keeps a deduplicated visitation list."""
+    seen: set[str] = set()
+    merged: List[str] = []
+    for bucket in (left or []), (right or []):
+        for url in bucket or []:
+            if url not in seen:
+                seen.add(url)
+                merged.append(url)
+    return merged
+
+def merge_host_counts(left: Dict[str, int] | None, right: Dict[str, int] | None) -> Dict[str, int]:
+    """Reducer that keeps the max observed visit count per host."""
+    merged: Dict[str, int] = dict(left or {})
+    for host, count in (right or {}).items():
+        merged[host] = max(merged.get(host, 0), count)
+    return merged
+
 class GraphState(TypedDict):
     """
     The central state of our recursive analysis engine.
@@ -69,6 +87,12 @@ class GraphState(TypedDict):
 
     # The accumulated graph of articles and their relationships
     knowledge_graph: Annotated[KnowledgeGraph, reduce_knowledge_graph]
+
+    # Track visited URLs to prevent infinite loops
+    visited_urls: Annotated[List[str], merge_visited_urls]
+
+    # Track per-host visit counts so we can limit recursive hops on a single domain
+    host_visit_counts: Annotated[Dict[str, int], merge_host_counts]
 
     # The vector embedding of the "Patient Zero" article
     global_context: List[float]

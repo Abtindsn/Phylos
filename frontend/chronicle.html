@@ -130,6 +130,40 @@
           }));
       };
 
+      const DEPTH_CHOICES = [1, 2, 3, 4, 5, 6];
+
+      const normalizeWhitespace = (text = '') => text.replace(/\s+/g, ' ').trim();
+
+      const extractHeadline = (content, fallback = '') => {
+        if (!content) return fallback;
+        const lines = content.split('\n').map((line) => line.trim()).filter(Boolean);
+        return lines[0] || fallback;
+      };
+
+      const extractSummary = (content) => {
+        if (!content) return '';
+        const [body] = content.split('Referenced URLs:');
+        const normalized = normalizeWhitespace(body);
+        if (normalized.length <= 220) {
+          return normalized;
+        }
+        return `${normalized.slice(0, 220)}…`;
+      };
+
+      const extractReferences = (links) => {
+        if (!Array.isArray(links)) {
+          return [];
+        }
+        return links.map((link) => (typeof link === 'string' ? link.trim() : '')).filter(Boolean);
+      };
+
+      const clampStyle = (lines) => ({
+        display: '-webkit-box',
+        WebkitLineClamp: lines,
+        WebkitBoxOrient: 'vertical',
+        overflow: 'hidden',
+      });
+
       const enrichNodes = (graph) => {
         const edges = graph.edges || [];
         const scoreMap = edges.reduce((acc, edge) => {
@@ -138,16 +172,26 @@
           }
           return acc;
         }, {});
-        return (graph.nodes || []).map((node) => ({
-          id: node.id,
-          title: node.content?.split('. ')[0] || node.id,
-          url: node.id,
-          mutationScore: scoreMap[node.id] ?? 0,
-          timestamp: node.timestamp,
-          author: node.author || 'Unknown',
-          depth: node.depth || 0,
-          content: node.content || '',
-        }));
+        const rawNodes = Array.isArray(graph.nodes) ? graph.nodes : [];
+        return rawNodes.map((node) => {
+          const id = node.id;
+          const mutationScore = typeof node.mutation_score === 'number'
+            ? node.mutation_score
+            : (scoreMap[id] ?? 0);
+          const references = extractReferences(node.outbound_links).slice(0, 12);
+          return {
+            id,
+            title: extractHeadline(node.content, id),
+            summary: extractSummary(node.content),
+            url: id,
+            mutationScore,
+            timestamp: node.timestamp,
+            author: node.author || 'Unknown',
+            depth: node.depth || 0,
+            content: node.content || '',
+            references,
+          };
+        });
       };
 
       function PhylosUI() {
@@ -258,6 +302,10 @@
 
         const startAnalysis = () => {
           if (!url || isAnalyzing) return;
+          const normalizedDepth = Math.min(6, Math.max(1, Number(maxDepth) || 1));
+          if (normalizedDepth !== maxDepth) {
+            setMaxDepth(normalizedDepth);
+          }
           setIsAnalyzing(true);
           setGraphData(null);
           setSelectedNode(null);
@@ -274,7 +322,7 @@
           wsRef.current = ws;
 
           ws.onopen = () => {
-            ws.send(JSON.stringify({ start_url: url, max_depth: Number(maxDepth) || 1 }));
+            ws.send(JSON.stringify({ start_url: url, max_depth: normalizedDepth }));
           };
           ws.onmessage = (event) => {
             try {
@@ -388,7 +436,7 @@
                     Submit a source URL to trace its narrative mutations across the information network
                   </p>
                   
-                  <div className="flex gap-3">
+                  <div className="flex flex-col gap-3 lg:flex-row">
                     <div className="flex-1 relative">
                       <LucideIcon name="Search" className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-amber-700/50" />
                       <input
@@ -400,10 +448,27 @@
                         onKeyPress={(e) => e.key === 'Enter' && startAnalysis()}
                       />
                     </div>
+                    <div className="w-full lg:w-48 flex flex-col text-xs font-serif text-amber-200/70">
+                      <span className="uppercase tracking-widest text-amber-600 mb-1">Depth Limit</span>
+                      <select
+                        value={maxDepth}
+                        onChange={(e) => setMaxDepth(Math.min(6, Math.max(1, Number(e.target.value) || 1)))}
+                        className="bg-black/60 border-2 border-amber-900/40 rounded-sm px-3 py-3 text-amber-100 focus:outline-none focus:border-amber-700/60 focus:ring-2 focus:ring-amber-700/20 font-mono text-sm"
+                      >
+                        {DEPTH_CHOICES.map((depth) => (
+                          <option key={depth} value={depth}>
+                            {depth} hop{depth > 1 ? 's' : ''}
+                          </option>
+                        ))}
+                      </select>
+                      <span className="text-[0.7rem] text-amber-200/50 mt-1">
+                        Controls how far the crawler branches out (default 3).
+                      </span>
+                    </div>
                     <button
                       onClick={startAnalysis}
                       disabled={isAnalyzing || !url}
-                      className="px-8 py-4 bg-gradient-to-b from-amber-800 to-amber-900 rounded-sm font-serif uppercase text-sm tracking-wider hover:from-amber-700 hover:to-amber-800 disabled:opacity-50 disabled:cursor-not-allowed transition-all flex items-center gap-2 shadow-lg border border-amber-700/50"
+                      className="w-full lg:w-auto px-8 py-4 bg-gradient-to-b from-amber-800 to-amber-900 rounded-sm font-serif uppercase text-sm tracking-wider hover:from-amber-700 hover:to-amber-800 disabled:opacity-50 disabled:cursor-not-allowed transition-all flex items-center justify-center gap-2 shadow-lg border border-amber-700/50"
                     >
                       {isAnalyzing ? (
                         <>
@@ -478,8 +543,21 @@
                             <div className="flex-1 min-w-0">
                               <div className="flex items-start justify-between mb-2">
                                 <div className="flex-1">
-                                  <h4 className="font-serif text-lg font-bold text-amber-50 mb-1">{node.title}</h4>
-                                  <p className="text-xs text-amber-700/70 uppercase tracking-wide font-serif">By {node.author}</p>
+                                  <h4
+                                    className="font-serif text-lg font-bold text-amber-50 mb-1 break-words"
+                                    style={clampStyle(2)}
+                                  >
+                                    {node.title}
+                                  </h4>
+                                  <p className="text-xs text-amber-700/70 uppercase tracking-wide font-serif mb-2">
+                                    By {node.author}
+                                  </p>
+                                  <p
+                                    className="text-sm text-amber-200/80 font-serif"
+                                    style={clampStyle(3)}
+                                  >
+                                    {node.summary || 'Summary unavailable.'}
+                                  </p>
                                 </div>
                                 <span className={`text-xs px-3 py-1 border-2 ml-4 ${
                                   node.mutationScore < 0.2 ? 'bg-emerald-900/40 border-emerald-700 text-emerald-200' :
@@ -591,6 +669,32 @@
                               </div>
                               <span className="font-bold font-mono text-amber-100">{selectedNode.mutationScore.toFixed(3)}</span>
                             </div>
+                          </div>
+                          <div>
+                            <span className="text-amber-600/80 block mb-2 uppercase text-xs tracking-wide">Brief</span>
+                            <p className="text-amber-100/80 leading-relaxed font-serif bg-black/20 border border-amber-900/30 p-3">
+                              {selectedNode.summary || 'Summary unavailable.'}
+                            </p>
+                          </div>
+                          <div>
+                            <span className="text-amber-600/80 block mb-2 uppercase text-xs tracking-wide">Referenced URLs</span>
+                            {selectedNode.references && selectedNode.references.length > 0 ? (
+                              <div className="space-y-2 max-h-48 overflow-y-auto pr-1">
+                                {selectedNode.references.map((href, idx) => (
+                                  <a
+                                    key={`${href}-${idx}`}
+                                    href={href}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    className="block text-xs font-mono text-amber-200/80 border border-amber-900/30 px-3 py-2 bg-black/30 hover:border-amber-700/60 transition-colors break-all"
+                                  >
+                                    {href}
+                                  </a>
+                                ))}
+                              </div>
+                            ) : (
+                              <p className="text-xs text-amber-400/70 italic">No outbound links captured.</p>
+                            )}
                           </div>
                         </div>
                       </div>

@@ -308,13 +308,15 @@ def _build_node_snapshots(graph: Dict[str, Any]) -> List[Dict[str, Any]]:
 
     nodes = []
     for node_id, payload in (graph.get("nodes") or {}).items():
+        resolved_id = payload.get("id", node_id)
         nodes.append({
-            "id": payload.get("id", node_id),
+            "id": resolved_id,
             "content": payload.get("content", ""),
             "author": payload.get("author"),
             "timestamp": payload.get("timestamp"),
             "depth": payload.get("depth", 0),
-            "mutation_score": score_map.get(payload.get("id", node_id), score_map.get(node_id, 0.0)),
+            "mutation_score": score_map.get(resolved_id, score_map.get(node_id, 0.0)),
+            "outbound_links": payload.get("outbound_links") or [],
         })
     return nodes
 
@@ -1188,6 +1190,8 @@ async def websocket_endpoint(websocket: WebSocket):
         initial_state: GraphState = {
             "traversal_queue": [(request.start_url, None, 0)], # (url, parent_id, depth)
             "knowledge_graph": {"nodes": {}, "edges": []},
+            "visited_urls": [],
+            "host_visit_counts": {},
             "global_context": global_context_embedding,
             "current_article": None,
             "parent_article_id": None,
