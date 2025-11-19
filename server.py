@@ -69,6 +69,25 @@ def _strip_references(text: str) -> str:
     parts = text.split("Referenced URLs:")
     return parts[0].strip()
 
+def _parse_insight_json(raw: str) -> dict | None:
+    """Try to parse Gemini output into JSON even if wrapped."""
+    if not raw:
+        return None
+
+    try:
+        return json.loads(raw)
+    except Exception:
+        pass
+
+    match = re.search(r'\{.*\}', raw, re.DOTALL)
+    if match:
+        candidate = match.group(0)
+        try:
+            return json.loads(candidate)
+        except Exception:
+            pass
+    return None
+
 def _summarize_event_data(data, edge_updates=None):
     if not isinstance(data, dict):
         return data
@@ -400,13 +419,29 @@ def _summarize_origin_difference(origin_text: str, node_text: str, article_title
     raw = generate_origin_insight(prompt, fallback_payload)
     summary = fallback_summary
     hidden = fallback_hidden
-    try:
-        data = json.loads(raw)
-        summary = (data.get("summary") or "").strip() or fallback_summary
-        hidden = (data.get("investigation") or "").strip() or None
-    except Exception:
-        summary = raw.strip() or fallback_summary
-        hidden = fallback_hidden
+
+    data = _parse_insight_json(raw)
+    if isinstance(data, dict):
+        summary_text = (data.get("summary") or "").strip()
+        investigation_text = (
+            data.get("investigation")
+            or data.get("analysis")
+            or data.get("reason")
+            or ""
+        ).strip()
+
+        if summary_text:
+            summary = summary_text
+        if investigation_text:
+            hidden = investigation_text
+        else:
+            hidden = fallback_hidden
+    else:
+        raw_text = (raw or "").strip()
+        if raw_text:
+            summary = raw_text
+            hidden = fallback_hidden
+
     return summary, hidden
 
 def _build_node_snapshots(
@@ -473,6 +508,9 @@ def _build_investigation_entry(origin: dict | None, article: dict | None, rapid:
         summary, hidden = _fallback_origin_summary(origin_content, article_content, title)
     else:
         summary, hidden = _summarize_origin_difference(origin_content, article_content, title)
+    if not hidden or hidden.strip() == summary.strip():
+        host = _short_host(article.get("id")) or "source"
+        hidden = f"Internal investigation note: awaiting deeper comparison for {host}."
     entry = {
         "id": article.get("id"),
         "title": title or article.get("id"),

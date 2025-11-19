@@ -586,106 +586,108 @@
 
                     {/* Newspaper-style article cards */}
                     <div className="space-y-4">
-                      {graphData.nodes.length ? graphData.nodes.map((node, idx) => {
-                        const targetUrl = node.url || '#';
-                        const nextNode = graphData.nodes[idx + 1];
-                        return (
-                          <React.Fragment key={node.id}>
-                            <a
-                              href={targetUrl}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              onClick={() => setSelectedNode(node)}
-                              className={`block p-5 border-2 cursor-pointer transition-all ${
-                                selectedNode?.id === node.id
-                                  ? 'bg-amber-900/20 border-amber-700/60 shadow-lg'
-                                  : 'bg-black/30 border-amber-900/30 hover:border-amber-800/50 hover:bg-amber-950/20'
-                              }`}
-                            >
-                              <div className="flex items-start gap-4">
-                                <div className={`w-14 h-14 ${getMutationColor(node.mutationScore)} border-2 ${
-                                  node.mutationScore < 0.2 ? 'border-emerald-600' :
-                                  node.mutationScore < 0.5 ? 'border-amber-500' :
-                                  'border-red-700'
-                                } flex items-center justify-center flex-shrink-0 shadow-lg`}>
-                                  {node.mutationScore < 0.2 ? (
-                                    <LucideIcon name="Shield" className="w-7 h-7 text-emerald-100" />
-                                  ) : node.mutationScore < 0.5 ? (
-                                    <LucideIcon name="TrendingUp" className="w-7 h-7 text-amber-100" />
-                                  ) : (
-                                    <LucideIcon name="AlertTriangle" className="w-7 h-7 text-red-100" />
-                                  )}
-                                </div>
-                                <div className="flex-1 min-w-0">
-                                  <div className="flex items-start justify-between mb-2">
-                                    <div className="flex-1">
-                                      <h4
-                                        className="font-serif text-lg font-bold text-amber-50 mb-1 break-words"
-                                        style={clampStyle(2)}
-                                      >
-                                        {node.title}
-                                      </h4>
-                                      <p className="text-xs text-amber-700/70 uppercase tracking-wide font-serif mb-2">
-                                        By {node.author}
-                                      </p>
-                                      <p
-                                        className="text-sm text-amber-200/80 font-serif"
-                                        style={clampStyle(3)}
-                                      >
-                                        {node.summary || 'Summary unavailable.'}
-                                      </p>
-                                    </div>
-                                    <span className={`text-xs px-3 py-1 border-2 ml-4 ${
-                                      node.mutationScore < 0.2 ? 'bg-emerald-900/40 border-emerald-700 text-emerald-200' :
-                                      node.mutationScore < 0.5 ? 'bg-amber-900/40 border-amber-700 text-amber-200' :
-                                      'bg-red-900/40 border-red-700 text-red-200'
-                                    } font-serif uppercase tracking-wider`}>
-                                      {getMutationLabel(node.mutationScore)}
-                                    </span>
-                                    {idx === 0 && (
-                                      <span className="ml-3 text-xs px-3 py-1 border border-emerald-500 text-emerald-200 uppercase tracking-wider font-serif">
-                                        Original Source
+                      {graphData.nodes.length ? (
+                        graphData.nodes.map((node, idx) => {
+                          const targetUrl = node.url || '#';
+                          const nextNode = graphData.nodes[idx + 1];
+                          return (
+                            <React.Fragment key={node.id}>
+                              <a
+                                href={targetUrl}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                onClick={() => setSelectedNode(node)}
+                                className={`block p-5 border-2 cursor-pointer transition-all ${
+                                  selectedNode?.id === node.id
+                                    ? 'bg-amber-900/20 border-amber-700/60 shadow-lg'
+                                    : 'bg-black/30 border-amber-900/30 hover:border-amber-800/50 hover:bg-amber-950/20'
+                                }`}
+                              >
+                                <div className="flex items-start gap-4">
+                                  <div className={`w-14 h-14 ${getMutationColor(node.mutationScore)} border-2 ${
+                                    node.mutationScore < 0.2 ? 'border-emerald-600' :
+                                    node.mutationScore < 0.5 ? 'border-amber-500' :
+                                    'border-red-700'
+                                  } flex items-center justify-center flex-shrink-0 shadow-lg`}>
+                                    {node.mutationScore < 0.2 ? (
+                                      <LucideIcon name="Shield" className="w-7 h-7 text-emerald-100" />
+                                    ) : node.mutationScore < 0.5 ? (
+                                      <LucideIcon name="TrendingUp" className="w-7 h-7 text-amber-100" />
+                                    ) : (
+                                      <LucideIcon name="AlertTriangle" className="w-7 h-7 text-red-100" />
+                                    )}
+                                  </div>
+                                  <div className="flex-1 min-w-0">
+                                    <div className="flex items-start justify-between mb-2">
+                                      <div className="flex-1">
+                                        <h4
+                                          className="font-serif text-lg font-bold text-amber-50 mb-1 break-words"
+                                          style={clampStyle(2)}
+                                        >
+                                          {node.title}
+                                        </h4>
+                                        <p className="text-xs text-amber-700/70 uppercase tracking-wide font-serif mb-2">
+                                          By {node.author}
+                                        </p>
+                                        <p
+                                          className="text-sm text-amber-200/80 font-serif"
+                                          style={clampStyle(3)}
+                                        >
+                                          {node.summary || 'Summary unavailable.'}
+                                        </p>
+                                      </div>
+                                      <span className={`text-xs px-3 py-1 border-2 ml-4 ${
+                                        node.mutationScore < 0.2 ? 'bg-emerald-900/40 border-emerald-700 text-emerald-200' :
+                                        node.mutationScore < 0.5 ? 'bg-amber-900/40 border-amber-700 text-amber-200' :
+                                        'bg-red-900/40 border-red-700 text-red-200'
+                                      } font-serif uppercase tracking-wider`}>
+                                        {getMutationLabel(node.mutationScore)}
                                       </span>
-                                    )}
-                                  </div>
-                                  <p className="text-sm text-amber-300/50 font-mono truncate border-l-2 border-amber-900/30 pl-3">{node.url}</p>
-                                  <div className="flex items-center gap-4 mt-3 text-xs text-amber-600/60 font-serif italic border-t border-amber-900/20 pt-2">
-                                    <span>Mutation Index: {node.mutationScore.toFixed(3)}</span>
-                                    <span>•</span>
-                                    <span>Published: {formatTimestamp(node.timestamp)}</span>
-                                    {typeof node.originSimilarity === 'number' && (
-                                      <>
-                                        <span>•</span>
-                                        <span>Origin Match: {formatPercent(node.originSimilarity)}</span>
-                                      </>
-                                    )}
-                                  </div>
-                                </div>
-                                <LucideIcon name="ExternalLink" className="w-5 h-5 text-amber-700/40" />
-                              </div>
-                            </a>
-                            {nextNode && (
-                              <div className="flex items-start gap-4 my-4 ml-8">
-                                <div className="flex items-center gap-3 text-amber-300 font-serif">
-                                  <LucideIcon name="ArrowDownCircle" className="w-6 h-6" />
-                                  <div>
-                                    <div className="text-sm uppercase tracking-wide">Δ vs Original</div>
-                                    <div className="font-mono text-lg">
-                                      {formatPercent(nextNode.originDifference)}
+                                      {idx === 0 && (
+                                        <span className="ml-3 text-xs px-3 py-1 border border-emerald-500 text-emerald-200 uppercase tracking-wider font-serif">
+                                          Original Source
+                                        </span>
+                                      )}
+                                    </div>
+                                    <p className="text-sm text-amber-300/50 font-mono truncate border-l-2 border-amber-900/30 pl-3">{node.url}</p>
+                                    <div className="flex items-center gap-4 mt-3 text-xs text-amber-600/60 font-serif italic border-t border-amber-900/20 pt-2">
+                                      <span>Mutation Index: {node.mutationScore.toFixed(3)}</span>
+                                      <span>•</span>
+                                      <span>Published: {formatTimestamp(node.timestamp)}</span>
+                                      {typeof node.originSimilarity === 'number' && (
+                                        <>
+                                          <span>•</span>
+                                          <span>Origin Match: {formatPercent(node.originSimilarity)}</span>
+                                        </>
+                                      )}
                                     </div>
                                   </div>
+                                  <LucideIcon name="ExternalLink" className="w-5 h-5 text-amber-700/40" />
                                 </div>
-                            <div className="flex-1 bg-black/40 border border-amber-900/40 p-4 text-sm text-amber-100/80 font-serif">
-                              <span className="block text-xs uppercase text-amber-400 tracking-wide mb-1">Gemini insight</span>
-                              <p style={clampStyle(4)}>
-                                {nextNode.originSummary || 'Origin comparison unavailable.'}
-                              </p>
-                            </div>
-                          </div>
-                        )}
-                          </React.Fragment>
-                        );
-                      )) : (
+                              </a>
+                              {nextNode && (
+                                <div className="flex items-start gap-4 my-4 ml-8">
+                                  <div className="flex items-center gap-3 text-amber-300 font-serif">
+                                    <LucideIcon name="ArrowDownCircle" className="w-6 h-6" />
+                                    <div>
+                                      <div className="text-sm uppercase tracking-wide">Δ vs Original</div>
+                                      <div className="font-mono text-lg">
+                                        {formatPercent(nextNode.originDifference)}
+                                      </div>
+                                    </div>
+                                  </div>
+                                  <div className="flex-1 bg-black/40 border border-amber-900/40 p-4 text-sm text-amber-100/80 font-serif">
+                                    <span className="block text-xs uppercase text-amber-400 tracking-wide mb-1">Gemini insight</span>
+                                    <p style={clampStyle(4)}>
+                                      {nextNode.originSummary || 'Origin comparison unavailable.'}
+                                    </p>
+                                  </div>
+                                </div>
+                              )}
+                            </React.Fragment>
+                          );
+                        })
+                      ) : (
                         <div className="text-center py-20 text-amber-400/60 font-serif italic border border-amber-900/30">
                           {isAnalyzing ? 'Collecting initial sources…' : 'Run a trace to populate the citation graph.'}
                         </div>
@@ -883,13 +885,12 @@
                             ) : (
                               <p className="text-xs text-amber-400/70 italic">No outbound links captured.</p>
                             )}
-                    </div>
+                          </div>
+                        </div>
+                      </div>
+                    )}
                   </div>
                 </div>
-              </div>
-                  </div>
-                </div>
-              )}
 
               {isAnalyzing && (
                 <div className="text-center py-20">

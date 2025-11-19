@@ -29,7 +29,7 @@ OFFLINE_MODE = os.getenv("PHYLOS_OFFLINE_MODE", os.getenv("PHYLOS_OFFLINE", "aut
 FORCE_OFFLINE = OFFLINE_MODE in {"1", "true", "yes", "on", "offline", "stub"}
 REQUEST_TIMEOUT = float(os.getenv("PHYLOS_GEMINI_TIMEOUT", "8"))
 HOST_VISIT_LIMIT = int(os.getenv("PHYLOS_MAX_VISITS_PER_HOST", "8"))
-ORIGIN_INSIGHT_MODEL_NAME = os.getenv("PHYLOS_ORIGIN_INSIGHT_MODEL", "gemini-2.5-pro")
+ORIGIN_INSIGHT_MODEL_NAME = os.getenv("PHYLOS_ORIGIN_INSIGHT_MODEL", "gemini-3-pro-preview")
 HTTP_HEADERS = {
     "User-Agent": os.getenv(
         "PHYLOS_HTTP_USER_AGENT",
@@ -80,7 +80,7 @@ USE_GEMINI = bool(GEMINI_API_KEY) and not FORCE_OFFLINE
 
 if USE_GEMINI:
     genai.configure(api_key=GEMINI_API_KEY)
-    llm = genai.GenerativeModel('gemini-pro')
+    llm = genai.GenerativeModel('gemini-3-pro-preview')
     try:
         origin_llm = genai.GenerativeModel(ORIGIN_INSIGHT_MODEL_NAME)
     except Exception:
