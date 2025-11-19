@@ -1518,21 +1518,21 @@ async def websocket_endpoint(websocket: WebSocket):
                 "name": event["name"],
                 "data": sanitized_data,
             })
-                if raw_data and isinstance(raw_data, dict):
-                    article = raw_data.get("current_article")
-                    investigation_entry = _maybe_record_investigation(session_context, article, rapid=True)
-                    if investigation_entry and not investigation_entry.get("_sent"):
-                        sanitized_entry = {
-                            "id": investigation_entry.get("id"),
-                            "title": investigation_entry.get("title"),
-                            "timestamp": investigation_entry.get("timestamp"),
-                            "summary": _sanitize_payload(investigation_entry.get("summary")),
-                            "reason": _sanitize_payload(investigation_entry.get("reason")),
-                            "investigation": _sanitize_payload(
-                                investigation_entry.get("investigation", investigation_entry.get("reason"))
-                            ),
-                            "url": investigation_entry.get("url"),
-                        }
+            if raw_data and isinstance(raw_data, dict):
+                article = raw_data.get("current_article")
+                investigation_entry = _maybe_record_investigation(session_context, article, rapid=True)
+                if investigation_entry and not investigation_entry.get("_sent"):
+                    sanitized_entry = {
+                        "id": investigation_entry.get("id"),
+                        "title": investigation_entry.get("title"),
+                        "timestamp": investigation_entry.get("timestamp"),
+                        "summary": _sanitize_payload(investigation_entry.get("summary")),
+                        "reason": _sanitize_payload(investigation_entry.get("reason")),
+                        "investigation": _sanitize_payload(
+                            investigation_entry.get("investigation", investigation_entry.get("reason"))
+                        ),
+                        "url": investigation_entry.get("url"),
+                    }
                     await websocket.send_json({
                         "status": "investigation",
                         "entry": sanitized_entry,
