@@ -15,6 +15,8 @@
   <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
   <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
   <script src="https://unpkg.com/lucide@latest"></script>
+  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/dompurify@3.1.6/dist/purify.min.js"></script>
   <style>
     .summary-box {
       padding: 12px;
@@ -185,6 +187,24 @@
           WebkitBoxOrient: 'vertical',
           overflow: 'hidden',
         });
+
+        const renderMarkdown = (text) => {
+          const raw = text || '';
+          try {
+            if (window.marked && window.DOMPurify) {
+              const html = window.marked.parse(raw, { breaks: true });
+              return { __html: window.DOMPurify.sanitize(html) };
+            }
+          } catch (error) {
+            console.warn('Markdown rendering failed, falling back to plaintext.', error);
+          }
+          const escaped = raw
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/\n/g, '<br />');
+          return { __html: escaped };
+        };
 
         const FALLBACK_MODEL_OPTIONS = [
           { id: 'gemini-3.0-pro', label: 'Gemini 3.0 Pro' },
@@ -1009,9 +1029,10 @@
                             <div className="avatar">
                               {msg.role === 'user' ? 'You' : msg.role === 'assistant' ? 'AI' : 'Sys'}
                             </div>
-                            <div className="bubble">
-                              {msg.text}
-                            </div>
+                            <div
+                              className="bubble"
+                              dangerouslySetInnerHTML={renderMarkdown(msg.text)}
+                            />
                           </div>
                         ))}
                         <div ref={chatEndRef} />
