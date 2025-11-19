@@ -59,6 +59,8 @@ This guide provides a complete, copy-paste-friendly set of commands to get the a
     # PHYLOS_REFERENCE_PREVIEW_LIMIT=40
     # Optional: extend the link blocklist (comma-separated host suffixes)
     # PHYLOS_LINK_BLOCKLIST=example.com,offline.phylos
+    # Optional: choose the Gemini model used for origin-difference insights (defaults to gemini-2.5-pro)
+    # PHYLOS_ORIGIN_INSIGHT_MODEL=gemini-2.5-pro
     ```
 
     > **Important:** Setting `PHYLOS_OFFLINE_MODE=1` forces the crawler to use stubbed

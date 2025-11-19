@@ -9,6 +9,9 @@ import json
 import logging
 from pathlib import Path
 import difflib
+import re
+from urllib.parse import urlparse
+import asyncio
 import uvicorn
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException
 from fastapi.responses import HTMLResponse
@@ -53,6 +56,18 @@ def _brief_article(article: dict | None) -> dict | None:
         "author": article.get("author"),
         "content_preview": _shorten(article.get("content", ""), MAX_STRING_LENGTH),
     }
+
+def _short_host(url: str | None) -> str | None:
+    if not url:
+        return None
+    host = urlparse(url).netloc
+    return host or url
+
+def _strip_references(text: str) -> str:
+    if not text:
+        return ""
+    parts = text.split("Referenced URLs:")
+    return parts[0].strip()
 
 def _summarize_event_data(data, edge_updates=None):
     if not isinstance(data, dict):
@@ -161,6 +176,8 @@ def _create_session() -> tuple[str, Dict[str, Any]]:
         "knowledge_graph": {"nodes": {}, "edges": []},
         "summary": None,
         "history": [],
+        "investigation": [],
+        "investigation_map": {},
     }
     return session_id, SESSION_CONTEXTS[session_id]
 
@@ -309,31 +326,88 @@ def _origin_similarity(origin_embedding, target_embedding):
     except Exception:
         return None
 
-def _fallback_origin_summary(origin_text: str, node_text: str) -> str:
-    matcher = difflib.SequenceMatcher(None, origin_text, node_text)
-    overlap = matcher.quick_ratio()
-    longest = matcher.find_longest_match(0, len(origin_text), 0, len(node_text))
-    snippet = node_text[longest.b:longest.b + min(220, longest.size)]
-    snippet = snippet or node_text[:220]
-    return (
-        f"Similarity score {overlap:.2f} vs. origin. "
-        f"Origin focuses on \"{origin_text[:140].strip()}...\" whereas this article "
-        f"introduces or emphasizes \"{snippet.strip()}\"."
-    )
-
-def _summarize_origin_difference(origin_text: str, node_text: str) -> str:
-    if not origin_text or not node_text:
+def _strip_references(text: str) -> str:
+    if not text:
         return ""
-    fallback = _fallback_origin_summary(origin_text, node_text)
-    prompt = (
-        "Compare the ORIGINAL STORY to the ARTICLE that followed it. "
-        "Write 3 bullet-style sentences (but return plain text) describing: "
-        "(1) what the original emphasized, (2) what new detail/tone/angle the article adds, "
-        "and (3) whether the article reinforces, softens, or contradicts the original premise. "
-        "Mention both pieces explicitly and avoid speculation beyond the provided text.\n\n"
-        f"ORIGINAL STORY:\n{origin_text[:3000]}\n\nARTICLE:\n{node_text[:3000]}"
+    parts = text.split("Referenced URLs:")
+    return parts[0].strip()
+
+def _first_unique_sentence(origin_text: str, node_text: str) -> str:
+    sentence_splitter = r'(?<=[.!?])\s+'
+    origin_sentences = [s.strip() for s in re.split(sentence_splitter, origin_text) if s.strip()]
+    node_sentences = [s.strip() for s in re.split(sentence_splitter, node_text) if s.strip()]
+    origin_norm = {re.sub(r'\W+', '', s).lower() for s in origin_sentences}
+    for sentence in node_sentences:
+        normalized = re.sub(r'\W+', '', sentence).lower()
+        if normalized and normalized not in origin_norm:
+            return sentence
+    return node_sentences[0] if node_sentences else node_text[:200]
+
+def _fallback_origin_summary(origin_text: str, node_text: str, article_title: str | None = None) -> tuple[str, str | None]:
+    clean_origin = _strip_references(origin_text)
+    clean_node = _strip_references(node_text)
+    matcher = difflib.SequenceMatcher(None, clean_origin, clean_node)
+    overlap = matcher.quick_ratio()
+    origin_focus = clean_origin[:220].strip().replace("\n", " ")
+    unique_sentence = _first_unique_sentence(clean_origin, clean_node)
+    changed_focus = unique_sentence.strip().replace("\n", " ")
+
+    if overlap > 0.85:
+        delta = "The later article largely mirrors the original but reiterates it for a new audience."
+    elif overlap > 0.6:
+        delta = "It keeps most of the framing but adds fresh context or emphasis in the highlighted excerpt."
+    else:
+        delta = "It meaningfully reframes the story and draws attention to new angles in the highlighted excerpt."
+
+    article_label = article_title or "Follow-on article"
+    summary = (
+        f"{article_label}: Original focus centered on {origin_focus}... "
+        f"This piece highlights {changed_focus}... "
+        f"Net effect: {delta}"
     )
-    return generate_origin_insight(prompt, fallback)
+    hidden = (
+        f"Hidden investigation: compared normalized sentences; first unique sentence in article "
+        f"was '{changed_focus}'. Overlap score {overlap:.2f}."
+    )
+    return summary, hidden
+
+def _summarize_origin_difference(origin_text: str, node_text: str, article_title: str | None = None) -> tuple[str, str | None]:
+    if not origin_text or not node_text:
+        return "", None
+    fallback_summary, fallback_hidden = _fallback_origin_summary(origin_text, node_text, article_title)
+    fallback_payload = json.dumps({
+        "summary": fallback_summary,
+        "investigation": fallback_hidden,
+    })
+    prompt = (
+        "Primary Objective: You are an elite Signal Investigator performing a forensic, differential analysis "
+        "between the ORIGINAL STORY and the FOLLOW-UP ARTICLE shown below. Your task is to isolate verifiable Signal "
+        "(facts, causal intent) from Noise (editorial tone, omissions) and reconstruct how and why the narrative evolved.\n\n"
+        "Respond STRICTLY in compact JSON with two string fields only: "
+        "{\"summary\": \"public-facing insight\", \"investigation\": \"private chain-of-investigation\"}.\n\n"
+        "SUMMARY (2-3 sentences) must:\n"
+        " • Describe the Core Power (facts shared across both pieces) and highlight the most significant Δ (difference).\n"
+        " • State whether the follow-up reinforces, contradicts, or reframes the original, referencing the source host.\n"
+        "INVESTIGATION (3-4 sentences, hidden) must follow the First-Principles playbook:\n"
+        " • Evidence Set & Source Profiles (identify URLs + timestamps, biases).\n"
+        " • Commonality Grid (Shared facts) and Discrepancy Matrix items labeled Δ_F, Δ_I, Δ_P.\n"
+        " • Hypothesis testing: propose at least two motives for the change, then argue which is superior using the evidence.\n"
+        " • Explicitly define Signal vs. Noise in your reasoning and reference the original URLs when citing evidence.\n"
+        "No steps may be skipped.\n\n"
+        f"ARTICLE TITLE: {article_title or 'Unknown'}\n"
+        f"ORIGINAL STORY:\n{_strip_references(origin_text)[:3000]}\n\nFOLLOW-UP ARTICLE:\n{_strip_references(node_text)[:3000]}"
+    )
+    raw = generate_origin_insight(prompt, fallback_payload)
+    summary = fallback_summary
+    hidden = fallback_hidden
+    try:
+        data = json.loads(raw)
+        summary = (data.get("summary") or "").strip() or fallback_summary
+        hidden = (data.get("investigation") or "").strip() or None
+    except Exception:
+        summary = raw.strip() or fallback_summary
+        hidden = fallback_hidden
+    return summary, hidden
 
 def _build_node_snapshots(
     graph: Dict[str, Any],
@@ -364,6 +438,7 @@ def _build_node_snapshots(
             "origin_similarity": similarity,
             "origin_difference": difference,
             "origin_summary": None,
+            "origin_hidden_reason": None,
         })
 
     origin_text = (origin_content or "").strip()
@@ -373,12 +448,77 @@ def _build_node_snapshots(
                 continue
             if origin_url and entry["id"] == origin_url:
                 entry["origin_summary"] = "Reference article supplied as the starting point."
+                entry["origin_hidden_reason"] = "Origin node – investigation not needed."
                 continue
             try:
-                entry["origin_summary"] = _summarize_origin_difference(origin_text, entry["content"])
+                article_title = entry.get("title") or entry.get("id")
+                summary, hidden = _summarize_origin_difference(origin_text, entry["content"], article_title)
             except Exception:
-                entry["origin_summary"] = _fallback_origin_summary(origin_text, entry["content"])
+                summary, hidden = _fallback_origin_summary(origin_text, entry["content"], entry.get("title"))
+            entry["origin_summary"] = summary
+            entry["origin_hidden_reason"] = hidden
     return nodes
+
+def _build_investigation_entry(origin: dict | None, article: dict | None, rapid: bool = False) -> dict | None:
+    if not origin or not article:
+        return None
+    origin_content = origin.get("content")
+    if not origin_content:
+        return None
+    article_content = article.get("content")
+    if not article_content:
+        return None
+    title = (article_content.split("\n", 1)[0] or article.get("id") or "").strip()
+    if rapid:
+        summary, hidden = _fallback_origin_summary(origin_content, article_content, title)
+    else:
+        summary, hidden = _summarize_origin_difference(origin_content, article_content, title)
+    entry = {
+        "id": article.get("id"),
+        "title": title or article.get("id"),
+        "timestamp": article.get("timestamp"),
+        "summary": summary,
+        "reason": hidden or summary,
+        "url": article.get("id"),
+    }
+    return entry
+
+def _build_investigation_timeline(nodes: list[dict], session_context: dict) -> list[dict]:
+    investigation_map = session_context.get("investigation_map") or {}
+    timeline = session_context.setdefault("investigation", [])
+    # ensure we have entries for nodes missing them
+    for node in nodes:
+        node_id = node.get("id")
+        if not node_id:
+            continue
+        if node_id not in investigation_map:
+            reason = node.get("origin_hidden_reason")
+            if not reason:
+                continue
+            entry = {
+                "id": node_id,
+                "title": node.get("title") or node_id,
+                "timestamp": node.get("timestamp"),
+                "summary": node.get("origin_summary"),
+                "reason": reason,
+                "url": node.get("id"),
+            }
+            investigation_map[node_id] = entry
+            timeline.append(entry)
+    return sorted(
+        [
+            {
+                "id": entry.get("id"),
+                "title": entry.get("title"),
+                "timestamp": entry.get("timestamp"),
+                "summary": entry.get("summary"),
+                "reason": entry.get("reason"),
+                "url": entry.get("url"),
+            }
+            for entry in timeline
+        ],
+        key=lambda item: (item.get("timestamp") or "", item.get("title") or "")
+    )
 
 # --- Local Imports ---
 from state import GraphState, InitialArticleRequest
@@ -1236,6 +1376,7 @@ async def session_graph(session_id: str):
         "edges": edge_snapshots,
         "stats": stats,
         "origin": {"url": origin_info.get("url")},
+        "investigation_timeline": _build_investigation_timeline(node_snapshots, context),
     }
 
 
@@ -1306,6 +1447,27 @@ async def websocket_endpoint(websocket: WebSocket):
                 "name": event["name"],
                 "data": sanitized_data,
             })
+            if raw_data and isinstance(raw_data, dict):
+                article = raw_data.get("current_article")
+                investigation_entry = _maybe_record_investigation(session_context, article, rapid=True)
+                if investigation_entry and not investigation_entry.get("_sent"):
+                    sanitized_entry = {
+                        "id": investigation_entry.get("id"),
+                        "title": investigation_entry.get("title"),
+                        "timestamp": investigation_entry.get("timestamp"),
+                        "summary": _sanitize_payload(investigation_entry.get("summary")),
+                        "reason": _sanitize_payload(investigation_entry.get("reason")),
+                        "url": investigation_entry.get("url"),
+                    }
+                    await websocket.send_json({
+                        "status": "investigation",
+                        "entry": sanitized_entry,
+                    })
+                    investigation_entry["_sent"] = True
+                if article:
+                    asyncio.create_task(
+                        _upgrade_investigation_entry(session_context, article, websocket)
+                    )
         
         await websocket.send_json({"status": "info", "message": "Graph traversal complete."})
         logger.info("WebSocket trace completed successfully for %s", request.start_url)
@@ -1332,3 +1494,74 @@ async def websocket_endpoint(websocket: WebSocket):
 # --- Main Execution ---
 if __name__ == "__main__":
     uvicorn.run(api, host="0.0.0.0", port=8000)
+def _maybe_record_investigation(
+    session_context: Dict[str, Any],
+    article: Dict[str, Any] | None,
+    *,
+    rapid: bool = False,
+    force: bool = False,
+) -> Dict[str, Any] | None:
+    if not article:
+        return None
+    article_id = article.get("id")
+    if not article_id:
+        return None
+    origin = session_context.get("origin")
+    if origin and article_id == origin.get("url"):
+        return None
+    investigation_map = session_context.setdefault("investigation_map", {})
+    existing = investigation_map.get(article_id)
+    if existing and not force:
+        if "timestamp" not in existing and article.get("timestamp"):
+            existing["timestamp"] = article.get("timestamp")
+        return existing
+
+    origin = session_context.get("origin")
+    if not origin or article_id == origin.get("url"):
+        return None
+
+    entry = _build_investigation_entry(origin, article, rapid=rapid)
+    if not entry:
+        return None
+
+    last_summary = session_context.get("last_investigation_summary")
+    if entry["summary"] and entry["summary"] == last_summary:
+        host = _short_host(article_id)
+        entry["summary"] = f"{entry['summary']} (Source: {host or article_id})"
+    session_context["last_investigation_summary"] = entry["summary"]
+
+    if existing:
+        existing.update(entry)
+        entry = existing
+    else:
+        investigation_map[article_id] = entry
+        session_context.setdefault("investigation", []).append(entry)
+    return entry
+
+async def _upgrade_investigation_entry(
+    session_context: Dict[str, Any],
+    article: Dict[str, Any],
+    websocket: WebSocket
+) -> None:
+    loop = asyncio.get_running_loop()
+    entry = await loop.run_in_executor(
+        None,
+        lambda: _maybe_record_investigation(session_context, article, rapid=False, force=True)
+    )
+    if not entry:
+        return
+    sanitized_entry = {
+        "id": entry.get("id"),
+        "title": entry.get("title"),
+        "timestamp": entry.get("timestamp"),
+        "summary": _sanitize_payload(entry.get("summary")),
+        "reason": _sanitize_payload(entry.get("reason")),
+        "url": entry.get("url"),
+    }
+    try:
+        await websocket.send_json({
+            "status": "investigation_update",
+            "entry": sanitized_entry,
+        })
+    except Exception as exc:
+        logger.debug("Failed to push investigation update: %s", exc)
