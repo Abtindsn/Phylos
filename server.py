@@ -188,7 +188,7 @@ def _sanitize_payload(value, depth=0):
 class ChatRequest(BaseModel):
     question: str
     session_id: str
-    model: Optional[str] = "gemini-1.5-flash"
+    model: Optional[str] = "gemini-1.5-flash-latest"
 
 def _create_session() -> tuple[str, Dict[str, Any]]:
     session_id = str(uuid.uuid4())
@@ -279,7 +279,7 @@ def _generate_graph_summary(graph: Dict[str, Any]) -> str:
     """
     return generate_text_response(prompt, fallback)
 
-def _generate_chat_reply(summary: str, history: List[Dict[str, str]], question: str, model_name: str = "gemini-1.5-flash") -> str:
+def _generate_chat_reply(summary: str, history: List[Dict[str, str]], question: str, model_name: str = "gemini-1.5-flash-latest") -> str:
     summary_preview = _shorten(summary, 220)
     fallback = "I'm having trouble connecting to the AI right now. Please try asking again in a moment."
     

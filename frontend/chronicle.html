@@ -245,7 +245,7 @@
           const [url, setUrl] = useState('');
           const [maxDepth, setMaxDepth] = useState(3);
           const [isAnalyzing, setIsAnalyzing] = useState(false);
-          const [selectedModel, setSelectedModel] = React.useState('gemini-1.5-flash');
+          const [selectedModel, setSelectedModel] = React.useState('gemini-1.5-flash-latest');
           const [graphData, setGraphData] = useState({ nodes: [], edges: [], origin: {}, timeline: [] });
           const [timelineEntries, setTimelineEntries] = useState([]);
           const timelineRef = useRef(null);
@@ -939,9 +939,9 @@
                           onChange={(e) => setSelectedModel(e.target.value)}
                           className="bg-black/40 border border-amber-900/40 text-amber-100/80 text-xs rounded-sm px-2 py-1 focus:outline-none focus:border-amber-700/60 font-mono"
                         >
-                          <option value="gemini-1.5-flash">Flash (Fast)</option>
+                          <option value="gemini-1.5-flash-latest">Flash (Fast)</option>
                           <option value="gemini-2.0-flash-exp">Flash 2.0 (Exp)</option>
-                          <option value="gemini-1.5-pro">Pro (Smart)</option>
+                          <option value="gemini-1.5-pro-latest">Pro (Smart)</option>
                         </select>
                       </div>
                       <div className="chat-messages mb-4 font-serif text-sm">
