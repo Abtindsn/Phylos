@@ -392,85 +392,15 @@ def _fallback_origin_summary(origin_text: str, node_text: str, article_title: st
 
 def _summarize_origin_difference(origin_text: str, node_text: str, article_title: str | None = None) -> tuple[str, str | None]:
     """
-    Ask Gemini (via generate_text_response) for a JSON payload describing the
-    public summary + hidden investigation for ORIGINAL vs FOLLOW-UP article.
-    Falls back to our deterministic diff summarizer if anything goes wrong.
+    TEMP DEBUG IMPLEMENTATION
+    This bypasses Gemini entirely so we can verify which backend is serving the UI.
     """
     if not origin_text or not node_text:
         return "", None
 
-    # Deterministic fallback ensures we always have a reasonable baseline
     fallback_summary, fallback_hidden = _fallback_origin_summary(origin_text, node_text, article_title)
-    fallback_payload = json.dumps(
-        {
-            "summary": fallback_summary,
-            "investigation": fallback_hidden or "",
-        },
-        ensure_ascii=False,
-    )
-
-    prompt = (
-        "Primary Objective: You are an elite Signal Investigator performing a forensic, differential analysis "
-        "between the ORIGINAL STORY and the FOLLOW-UP ARTICLE shown below. Your task is to isolate verifiable Signal "
-        "(facts, causal intent) from Noise (editorial tone, omissions) and reconstruct how and why the narrative evolved.\n\n"
-        "You MUST respond STRICTLY in compact JSON with two string fields only:\n"
-        "{\"summary\": \"public-facing insight\", \"investigation\": \"private chain-of-investigation\"}.\n\n"
-        "SUMMARY (2-3 sentences) must:\n"
-        " • Describe the Core Power (facts shared across both pieces) and highlight the most significant Δ (difference).\n"
-        " • State whether the follow-up reinforces, contradicts, or reframes the original, referencing the source host.\n"
-        f" • Explicitly mention the follow-up article id or title: {(article_title or 'Unknown')!r}.\n"
-        "INVESTIGATION (3-4 sentences, hidden) must follow the First-Principles playbook:\n"
-        " • Evidence Set & Source Profiles (identify URLs + timestamps, biases).\n"
-        " • Commonality Grid (Shared facts) and Discrepancy Matrix items labeled Δ_F, Δ_I, Δ_P.\n"
-        " • Hypothesis testing: propose at least two motives for the change, then argue which is superior using the evidence.\n"
-        " • Explicitly define Signal vs. Noise in your reasoning and reference the original URLs when citing evidence.\n"
-        "No steps may be skipped.\n\n"
-        f"ARTICLE TITLE: {article_title or 'Unknown'}\n"
-        "ORIGINAL STORY:\n"
-        f"{_strip_references(origin_text)[:3000]}\n\n"
-        "FOLLOW-UP ARTICLE:\n"
-        f"{_strip_references(node_text)[:3000]}"
-    )
-
-    try:
-        raw = generate_text_response(prompt, fallback_payload)
-        logger.debug("Origin insight raw (truncated): %s", _shorten(str(raw), 400))
-    except Exception as exc:
-        logger.warning("generate_text_response failed for origin insight: %s", exc)
-        return fallback_summary, fallback_hidden
-
-    summary = fallback_summary
-    hidden = fallback_hidden
-
-    data = _parse_insight_json(str(raw))
-
-    if isinstance(data, dict):
-        summary_candidate = (data.get("summary") or "").strip()
-        investigation_candidate = (
-            data.get("investigation")
-            or data.get("analysis")
-            or data.get("reason")
-            or ""
-        )
-        investigation_candidate = investigation_candidate.strip()
-
-        if summary_candidate:
-            summary = summary_candidate
-        if investigation_candidate:
-            hidden = investigation_candidate
-    elif data is not None:
-        text = str(data).strip()
-        if text:
-            summary = text
-    else:
-        raw_text = (raw or "").strip()
-        if raw_text:
-            summary = raw_text
-
-    if not hidden:
-        hidden = fallback_hidden
-    if hidden and summary and hidden.strip() == summary.strip():
-        hidden = fallback_hidden
+    summary = f"[DEBUG SUMMARY] {article_title or 'Unknown'} :: {fallback_summary}"
+    hidden = f"[DEBUG HIDDEN] {fallback_hidden}"
     return summary, hidden
 
 def _build_node_snapshots(

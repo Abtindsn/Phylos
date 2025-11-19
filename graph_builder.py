@@ -413,26 +413,16 @@ def summarize_mutation(parent_content: str, child_content: str) -> str:
     return generate_text_response(prompt, fallback)
 
 def generate_text_response(prompt: str, fallback: str) -> str:
-    """Generic helper to request text from the LLM with graceful fallback."""
-    global _gemini_text_available
-    if llm is None or not _gemini_text_available:
-        return fallback
-
-    def _call():
-        return llm.generate_content(prompt)
-
-    try:
-        response = _executor.submit(_call).result(timeout=REQUEST_TIMEOUT)
-        text = (response.text or "").strip()
-        if not text:
-            logger.warning("LLM text generation returned empty output. Using fallback.")
-            return fallback
-        logger.debug("LLM text generation succeeded (truncated): %s", text[:200])
-        return text
-    except (TimeoutError, Exception) as e:
-        logger.warning("LLM text generation failed (%s). Falling back to stub.", e)
-        _gemini_text_available = False
-        return fallback
+    """
+    TEMP DEBUG: Instrumented helper so we can confirm this path is actually invoked.
+    """
+    logger.info(
+        "generate_text_response CALLED (prompt_len=%s, fallback_len=%s)",
+        len(prompt or ""),
+        len(fallback or ""),
+    )
+    debug_marker = "[GEMINI-STUB]"
+    return f"{debug_marker} {fallback}"
 
 def generate_origin_insight(prompt: str, fallback: str) -> str:
     """Uses a higher-context Gemini model for origin-difference analysis."""
