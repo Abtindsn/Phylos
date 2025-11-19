@@ -229,15 +229,33 @@ def _accumulate_graph(accumulator: Dict[str, Any], data: Dict[str, Any] | None):
 def _generate_graph_summary(graph: Dict[str, Any]) -> str:
     node_count = len(graph.get("nodes", {}))
     edge_count = len(graph.get("edges", []))
-    sample_edges = [
-        {
-            "source": edge.get("source"),
-            "target": edge.get("target"),
-            "relation": edge.get("attributes", {}).get("relation_type"),
-            "score": edge.get("attributes", {}).get("mutation_score"),
-        }
-        for edge in graph.get("edges", [])[:5]
-    ]
+    all_edges = graph.get("edges", [])
+
+    # Sort edges by mutation score to find true hotspots
+    def get_score(edge):
+        score = edge.get("attributes", {}).get("mutation_score")
+        return float(score) if isinstance(score, (int, float)) else -1.0
+    
+    sorted_edges = sorted(all_edges, key=get_score, reverse=True)
+
+data     # De-duplicate hotspots to show unique connections
+    unique_hotspots = []
+    seen_connections = set()
+    for edge in sorted_edges:
+        source = edge.get("source")
+        target = edge.get("target")
+        connection_key = (source, target)
+        if connection_key not in seen_connections:
+            unique_hotspots.append({
+                "source": source,
+                "target": target,
+                "relation": edge.get("attributes", {}).get("relation_type"),
+                "score": edge.get("attributes", {}).get("mutation_score"),
+            })
+            seen_connections.add(connection_key)
+        if len(unique_hotspots) >= 5:
+            break
+    sample_edges = unique_hotspots
     edge_lines = []
     for edge in sample_edges:
         rel = edge["relation"] or "Unknown"
@@ -250,19 +268,37 @@ def _generate_graph_summary(graph: Dict[str, Any]) -> str:
     edge_snippet = "; ".join(edge_lines) if edge_lines else "No mutation edges captured."
     
     if ECO_MODE:
+        all_scores = [edge.get("attributes", {}).get("mutation_score", 0.0) for edge in all_edges]
+        valid_scores = [s for s in all_scores if isinstance(s, (int, float))]
+        avg_score = sum(valid_scores) / len(valid_scores) if valid_scores else 0.0
+        is_zero_score_anomaly = avg_score < 0.01 and edge_count > 10
+
+        investigation_steps = ""
+        if is_zero_score_anomaly:
+            investigation_steps = (
+                "**CRITICAL DATA INTEGRITY ALERT:**\n"
+                "The 'Avg Mutation Score' is 0.00. This is a strong indicator that **Eco Mode's** non-AI analysis failed to detect any meaningful narrative changes. The results in this report are likely unreliable.\n\n"
+                "**Next Investigative Steps:**\n"
+                "1. **Re-run the trace with Eco Mode OFF.** This is essential to perform a full semantic analysis using the Gemini model.\n"
+                "2. **Provide the 'phylos website' URL** or context if you are analyzing a specific organization's content network, as this information is not automatically captured.\n"
+            )
+
         # Zero-Token Summary Template
-        avg_score = sum(e["score"] for e in sample_edges if isinstance(e["score"], (int, float))) / len(sample_edges) if sample_edges else 0.0
         hotspots = "\n".join([f"- {e['source']} -> {e['target']} (Score: {e['score']:.2f})" for e in sample_edges[:3]])
-        return (
-            f"**Data Report (Eco Mode)**\n\n"
-            f"**Trace Statistics:**\n"
-            f"- Unique Sources: {node_count}\n"
-            f"- Narrative Connections: {edge_count}\n"
-            f"- Avg Mutation Score: {avg_score:.2f}\n\n"
-            f"**Top Mutation Hotspots:**\n"
-            f"{hotspots or 'None detected.'}\n\n"
-            f"*Note: This is an automated data report. Ask the chat assistant for deeper analysis.*"
-        )
+        
+        if is_zero_score_anomaly:
+            return investigation_steps
+        else:
+            return (
+                f"**Data Report (Eco Mode)**\n\n"
+                f"**Trace Statistics:**\n"
+                f"- Unique Sources: {node_count}\n"
+                f"- Narrative Connections: {edge_count}\n"
+                f"- Avg Mutation Score: {avg_score:.2f}\n\n"
+                f"**Top Mutation Hotspots:**\n"
+                f"{hotspots or 'None detected.'}\n\n"
+                f"*Note: This is an automated data report. Ask the chat assistant for deeper analysis.*"
+            )
 
     fallback = (
         f"The trace captured {node_count} unique sources tied together by {edge_count} narrative relationships. "
@@ -274,18 +310,34 @@ def _generate_graph_summary(graph: Dict[str, Any]) -> str:
     Edge count: {edge_count}
     Representative edges (source -> target, relation, score):
     {json.dumps(sample_edges, indent=2)}
+    Advanced Metrics:
+    {json.dumps(_advanced_mutation_metrics(graph.get('edges', [])), indent=2)}
 
     Describe overall findings in 2 short paragraphs and highlight potential mutation hotspots.
+    Incorporate the advanced metrics into your analysis.
     """
     return generate_text_response(prompt, fallback)
 
-def _generate_chat_reply(summary: str, history: List[Dict[str, str]], question: str, model_name: Optional[str] = None) -> str:
+def _generate_chat_reply(
+    summary: str,
+    history: List[Dict[str, str]],
+    question: str,
+    session_context: Dict[str, Any],
+    model_name: Optional[str] = None
+) -> str:
     summary_preview = _shorten(summary, 220)
     fallback = "I'm having trouble connecting to the AI right now. Please try asking again in a moment."
     
+    # Provide the AI with raw stats to detect anomalies
+    graph = session_context.get("knowledge_graph", {})
+    node_count = len(graph.get("nodes", {}))
+    edge_count = len(graph.get("edges", []))
+    
     history_text = "\n".join(f"{item['role']}: {item['content']}" for item in history[-6:])
     prompt = f"""
-    You are Gemini acting as an investigative analyst. Use the summary below to answer follow-up questions.
+    You are Gemini, an elite Signal Investigator. Your task is to analyze a narrative trace report and answer user questions.
+    You MUST detect and explain data integrity anomalies based on the provided context.
+    
     SUMMARY:
     {summary}
 
@@ -1424,27 +1476,37 @@ async def list_models():
 @api.post("/chat")
 async def chat_endpoint(request: ChatRequest):
     """Handles follow-up chat requests about the latest trace summary."""
-    session_data = SESSION_CONTEXTS.get(request.session_id)
-    if not session_data:
-        raise HTTPException(status_code=404, detail="Session not found. Run a trace first.")
-    if not session_data.get("summary"):
-        raise HTTPException(status_code=400, detail="Summary not ready yet. Please wait for the trace to finish.")
+    try:
+        session_data = SESSION_CONTEXTS.get(request.session_id)
+        if not session_data:
+            raise HTTPException(status_code=404, detail="Session not found. Run a trace first.")
+        if not session_data.get("summary"):
+            raise HTTPException(status_code=400, detail="Summary not ready yet. Please wait for the trace to finish.")
 
-    # Update history with user's question
-    session_data.setdefault("history", []).append({"role": "user", "content": request.question})
-    
-    # Generate reply
-    model_choice = request.model or get_default_chat_model()
-    reply = _generate_chat_reply(
-        session_data["summary"],
-        session_data["history"],
-        request.question,
-        model_choice,
-    )
-    
-    # Update history with assistant's reply
-    session_data["history"].append({"role": "assistant", "content": reply})
-    return {"reply": reply}
+        # Update history with user's question
+        session_data.setdefault("history", []).append({"role": "user", "content": request.question})
+        
+        # Log the model being used
+        logger.info("Chat request - Model: %s, Session: %s, Question: %s", 
+                    request.model or "default", request.session_id[:8], request.question[:50])
+        
+        # Generate reply
+        reply = _generate_chat_reply(
+            session_data["summary"],
+            session_data["history"],
+            request.question,
+            session_data,
+            request.model,
+        )
+        
+        # Update history with assistant's reply
+        session_data["history"].append({"role": "assistant", "content": reply})
+        return {"reply": reply}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("Chat endpoint error: %s", e, exc_info=True)
+        return {"reply": f"I encountered an error: {str(e)}. Please check the server logs for details."}
 
 @api.get("/session/{session_id}/graph")
 async def session_graph(session_id: str):

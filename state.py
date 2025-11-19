@@ -1,4 +1,4 @@
-"""
+ """
 Defines the strict, typed state for the narrative analysis graph and the data models for API communication.
 """
 from typing import TypedDict, List, Dict, Any, Annotated, Tuple

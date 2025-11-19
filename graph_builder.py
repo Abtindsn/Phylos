@@ -11,11 +11,11 @@ import hashlib
 import difflib
 from concurrent.futures import ThreadPoolExecutor, TimeoutError
 from langgraph.graph import StateGraph, END
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List
 import google.generativeai as genai
 from dotenv import load_dotenv
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from urllib.parse import urljoin, urlparse
 
 import requests
@@ -45,6 +45,7 @@ HTTP_HEADERS = {
 DEFAULT_BLOCKLIST = {
     "example.com",
     "offline.phylos",
+    "schema.org",
 }
 LINK_BLOCKLIST_SUFFIXES = {
     host.strip().lower()
@@ -78,138 +79,6 @@ DISALLOWED_EXTENSIONS = {
 
 logger = logging.getLogger("phylos.graph")
 
-def _normalize_model_name(value: str | None) -> str | None:
-    if not value:
-        return None
-    name = value.strip().strip('"').strip("'")
-    if not name:
-        return None
-    if "/" in name:
-        name = name.split("/")[-1]
-    return name
-
-def _unique_preserve(values):
-    seen = set()
-    deduped = []
-    for item in values:
-        if not item or item in seen:
-            continue
-        seen.add(item)
-        deduped.append(item)
-    return deduped
-
-MODEL_LABEL_OVERRIDES = {
-    "gemini-1.5-flash": "Gemini 1.5 Flash",
-    "gemini-1.5-flash-latest": "Gemini 1.5 Flash",
-    "gemini-1.5-flash-8b": "Gemini 1.5 Flash 8B",
-    "gemini-1.5-pro": "Gemini 1.5 Pro",
-    "gemini-1.5-pro-latest": "Gemini 1.5 Pro",
-    "gemini-2.0-flash-exp": "Gemini 2.0 Flash (Experimental)",
-    "gemini-2.0-flash": "Gemini 2.0 Flash",
-    "gemini-2.0-flash-lite": "Gemini 2.0 Flash Lite",
-    "gemini-2.0-flash-lite-preview": "Gemini 2.0 Flash Lite (Preview)",
-    "gemini-2.0-flash-thinking": "Gemini 2.0 Flash Thinking",
-    "gemini-2.0-flash-thinking-exp": "Gemini 2.0 Flash Thinking (Experimental)",
-    "gemini-2.0-flash-thinking-exp-01-21": "Gemini 2.0 Flash Thinking (Exp 01-21)",
-    "gemini-2.0-pro": "Gemini 2.0 Pro",
-    "gemini-2.0-pro-exp": "Gemini 2.0 Pro (Experimental)",
-    "gemini-2.0-pro-exp-02-05": "Gemini 2.0 Pro (Exp 02-05)",
-    "gemini-1.0-pro": "Gemini 1.0 Pro",
-    "gemini-pro": "Gemini Pro",
-    "gemini-3.0": "Gemini 3.0",
-    "gemini-3.0-flash": "Gemini 3.0 Flash",
-    "gemini-3.0-pro": "Gemini 3.0 Pro",
-}
-
-def _prettify_model_label(name: str) -> str:
-    if not name:
-        return "Gemini"
-    if name in MODEL_LABEL_OVERRIDES:
-        return MODEL_LABEL_OVERRIDES[name]
-    parts = name.replace("models/", "").replace("_", "-").split("-")
-    pretty = []
-    for part in parts:
-        if not part:
-            continue
-        if part.isdigit():
-            pretty.append(part)
-        elif len(part) == 1:
-            pretty.append(part.upper())
-        else:
-            pretty.append(part.capitalize())
-    return " ".join(pretty) or name
-
-DEFAULT_CHAT_MODEL = _normalize_model_name(os.getenv("PHYLOS_DEFAULT_CHAT_MODEL", "gemini-1.5-flash"))
-if not DEFAULT_CHAT_MODEL:
-    DEFAULT_CHAT_MODEL = "gemini-pro"
-
-_default_fallback_order = [
-    "gemini-2.0-flash",
-    "gemini-2.0-flash-lite",
-    "gemini-2.0-flash-lite-preview",
-    "gemini-2.0-flash-thinking",
-    "gemini-2.0-flash-thinking-exp-01-21",
-    "gemini-2.0-flash-exp",
-    "gemini-2.0-pro",
-    "gemini-2.0-pro-exp-02-05",
-    "gemini-3.0",
-    "gemini-3.0-flash",
-    "gemini-3.0-pro",
-    "gemini-1.5-pro",
-    "gemini-1.5-flash-8b",
-    "gemini-1.0-pro",
-    "gemini-pro",
-]
-_fallback_env = os.getenv(
-    "PHYLOS_CHAT_MODEL_FALLBACKS",
-    ",".join(_default_fallback_order),
-)
-CHAT_MODEL_FALLBACKS = _unique_preserve(
-    _normalize_model_name(item.strip())
-    for item in _fallback_env.split(",")
-    if item.strip()
-)
-AVAILABLE_GEMINI_MODELS: Dict[str, str] = {}
-_MODEL_CLIENTS: Dict[str, genai.GenerativeModel] = {}
-
-def _refresh_available_models() -> None:
-    if not USE_GEMINI:
-        return
-    try:
-        for model in genai.list_models():
-            name = _normalize_model_name(getattr(model, "name", None))
-            if not name:
-                continue
-            supported = set(getattr(model, "supported_generation_methods", []))
-            if "generateContent" not in supported:
-                continue
-            AVAILABLE_GEMINI_MODELS[name] = getattr(model, "display_name", name)
-    except Exception as exc:
-        logger.debug("Unable to list Gemini models: %s", exc)
-
-def _model_priority(preferred: str | None = None) -> List[str]:
-    return _unique_preserve(
-        [
-            _normalize_model_name(preferred),
-            DEFAULT_CHAT_MODEL,
-            *CHAT_MODEL_FALLBACKS,
-        ]
-    )
-
-def _get_model_client(name: str | None):
-    normalized = _normalize_model_name(name)
-    if not normalized:
-        return None
-    if normalized in _MODEL_CLIENTS:
-        return _MODEL_CLIENTS[normalized]
-    try:
-        client = genai.GenerativeModel(normalized)
-        _MODEL_CLIENTS[normalized] = client
-        return client
-    except Exception as exc:
-        logger.debug("Failed to initialize Gemini model %s: %s", normalized, exc)
-        return None
-
 if FORCE_OFFLINE:
     logger.info("Offline mode enforced via PHYLOS_OFFLINE flag.")
 
@@ -217,12 +86,10 @@ USE_GEMINI = bool(GEMINI_API_KEY) and not FORCE_OFFLINE
 
 if USE_GEMINI:
     genai.configure(api_key=GEMINI_API_KEY)
-    _refresh_available_models()
-    llm = _get_model_client(DEFAULT_CHAT_MODEL)
+    llm = genai.GenerativeModel('gemini-1.5-flash-latest')
     try:
         origin_llm = genai.GenerativeModel(ORIGIN_INSIGHT_MODEL_NAME)
-    except Exception as exc:
-        logger.warning("Unable to initialize origin insight model (%s). Falling back to stub.", exc)
+    except Exception:
         origin_llm = None
 else:
     if not GEMINI_API_KEY:
@@ -268,6 +135,28 @@ def _is_blocked_link(url: str) -> bool:
         haystack = f"{parsed.path} {parsed.query}".lower()
         if any(keyword in haystack for keyword in SOCIAL_SHARE_KEYWORDS):
             return True
+    return False
+
+def _has_future_date(url: str) -> bool:
+    """Checks if a URL contains a date string that is in the future."""
+    # Regex to find YYYY/MM/DD or YYYY-MM-DD patterns
+    match = re.search(r'(\d{4})[/-](\d{2})[/-](\d{2})', url)
+    if not match:
+        return False
+    
+    year, month, day = map(int, match.groups())
+    
+    try:
+        # Check for plausible dates
+        if not (1990 <= year <= 2100 and 1 <= month <= 12 and 1 <= day <= 31):
+            return False
+        
+        url_date = datetime(year, month, day, tzinfo=timezone.utc)
+        # If the date is more than a day in the future, flag it.
+        if url_date > datetime.now(timezone.utc) + timedelta(days=1):
+            return True
+    except ValueError:
+        return False # Invalid date like 2025/02/30
     return False
 
 # --- Core Utilities ---
@@ -584,7 +473,7 @@ def summarize_mutation(parent_content: str, child_content: str) -> str:
 
     return generate_text_response(prompt, fallback)
 
-def generate_text_response(prompt: str, fallback: str, model_name: Optional[str] = None) -> str:
+def generate_text_response(prompt: str, fallback: str, model_name: str = None) -> str:
     """
     Generates a text response using the configured Gemini model.
     Allows overriding the default model via model_name.
@@ -592,23 +481,16 @@ def generate_text_response(prompt: str, fallback: str, model_name: Optional[str]
     if not USE_GEMINI:
         return fallback
 
-    attempt_errors = []
-    for candidate in _model_priority(model_name):
-        client = _get_model_client(candidate)
-        if not client:
-            continue
-        try:
-            response = client.generate_content(prompt)
-            if response and getattr(response, "text", None):
-                return response.text
-        except Exception as exc:
-            attempt_errors.append((candidate, str(exc)))
-            logger.warning("Gemini generation failed via %s: %s", candidate, exc)
-
-    if attempt_errors:
-        details = "; ".join(f"{name}: {err}" for name, err in attempt_errors)
-        logger.error("All Gemini model attempts failed. Using fallback. Details: %s", details)
-    return fallback
+    try:
+        # Use the requested model if provided, otherwise use the default llm
+        active_model = genai.GenerativeModel(model_name) if model_name else llm
+        response = active_model.generate_content(prompt)
+        if response.text:
+            return response.text
+        return fallback
+    except Exception as e:
+        logger.error("Gemini generation failed: %s", e)
+        return f"AI Error: {str(e)}" if "429" not in str(e) else fallback
 
 def generate_origin_insight(prompt: str, fallback: str) -> str:
     """Uses a higher-context Gemini model for origin-difference analysis."""
@@ -627,55 +509,6 @@ def generate_origin_insight(prompt: str, fallback: str) -> str:
         _gemini_origin_available = False
         return fallback
 
-def get_chat_model_options() -> List[Dict[str, str]]:
-    """
-    Returns the list of chat-capable Gemini models prioritized by the current configuration.
-    Each entry includes an `id`, `label`, and `available` flag indicating whether the API
-    confirmed access to that model (if discoverable).
-    """
-    options: List[Dict[str, str]] = []
-    known = AVAILABLE_GEMINI_MODELS.copy()
-    seen: set[str] = set()
-
-    def _append(name: str):
-        if not name or name in seen:
-            return
-        seen.add(name)
-        label = known.get(name) or _prettify_model_label(name)
-        options.append({
-            "id": name,
-            "label": label,
-            "available": (not known) or (name in known),
-        })
-
-    for candidate in _model_priority():
-        _append(candidate)
-
-    if not options and known:
-        for name, label in known.items():
-            options.append({
-                "id": name,
-                "label": label,
-                "available": True,
-            })
-
-    if not options:
-        for candidate in _model_priority():
-            _append(candidate)
-
-    return options
-
-def get_default_chat_model() -> str | None:
-    """
-    Returns the preferred chat model id after filtering out unavailable options.
-    """
-    options = get_chat_model_options()
-    if not options:
-        return DEFAULT_CHAT_MODEL
-    for option in options:
-        if option.get("available", True):
-            return option["id"]
-    return options[0]["id"]
 
 # --- Graph Node Definitions ---
 
@@ -831,6 +664,9 @@ def node_branch(state: "GraphState") -> Dict[str, Any]:
         if link in visited or link in queued_urls:
             logger.debug("Skipping already seen link: %s", link)
             continue
+        if _has_future_date(link):
+            logger.warning("Skipping future-dated link: %s", link)
+            continue
         total_host_visits = host_counts.get(host, 0) + queued_host_counts.get(host, 0)
         if HOST_VISIT_LIMIT > 0 and total_host_visits >= HOST_VISIT_LIMIT:
             logger.debug("Host %s reached visit limit (%s). Skipping %s.", host, HOST_VISIT_LIMIT, link)
@@ -898,7 +734,7 @@ workflow.add_conditional_edges(
 
 app = workflow.compile()
 
-# For debugging: visualize the graph
+
 try:
     graph_image = app.get_graph().draw_mermaid_png()
     with open("/home/abtin/Phylos/graph_visualization.png", "wb") as f:
@@ -906,3 +742,91 @@ try:
     logger.info("Graph visualization saved to graph_visualization.png")
 except Exception as e:
     logger.warning("Could not draw graph visualization: %s", e)
+
+# --- Model Listing Functions ---
+
+def get_chat_model_options() -> List[Dict[str, Any]]:
+    """
+    Returns a list of available Gemini models for chat.
+    Fetches from API if possible, otherwise returns a curated fallback list.
+    """
+    # Curated list of known working Gemini models as of 2025
+    FALLBACK_MODELS = [
+        {"id": "gemini-2.5-flash", "label": "Gemini 2.5 Flash"},
+        {"id": "gemini-2.5-pro", "label": "Gemini 2.5 Pro"},
+        {"id": "gemini-2.0-flash-exp", "label": "Gemini 2.0 Flash (Experimental)"},
+        {"id": "gemini-2.0-flash", "label": "Gemini 2.0 Flash"},
+        {"id": "gemini-1.5-flash", "label": "Gemini 1.5 Flash"},
+        {"id": "gemini-1.5-flash-8b", "label": "Gemini 1.5 Flash 8B"},
+        {"id": "gemini-1.5-pro", "label": "Gemini 1.5 Pro"},
+        {"id": "gemini-1.0-pro", "label": "Gemini 1.0 Pro"},
+    ]
+    
+    if not USE_GEMINI:
+        return FALLBACK_MODELS
+    
+    try:
+        # Try to fetch available models from the API
+        models = genai.list_models()
+        chat_models = []
+        
+        for model in models:
+            # Filter for models that support generateContent
+            if 'generateContent' in model.supported_generation_methods:
+                model_id = model.name.replace('models/', '')
+                # Create a human-readable label
+                label = model_id.replace('-', ' ').title()
+                chat_models.append({
+                    "id": model_id,
+                    "label": label,
+                })
+        
+        # Sort models by ID (newest versions first)
+        import re
+        def model_sort_key(model):
+            """Sort by version number (descending), then alphabetically"""
+            model_id = model["id"]
+            # Extract version numbers like 2.5, 2.0, 1.5, 1.0
+            version_match = re.search(r'(\d+)\.(\d+)', model_id)
+            if version_match:
+                major = int(version_match.group(1))
+                minor = int(version_match.group(2))
+                # Return negative to sort descending
+                return (-major, -minor, model_id)
+            return (0, 0, model_id)
+        
+        chat_models.sort(key=model_sort_key)
+        
+        # If we successfully got models from the API, return them
+        if chat_models:
+            logger.info("Fetched %d chat models from Gemini API", len(chat_models))
+            return chat_models
+        else:
+            logger.warning("No chat models found from API, using fallback list")
+            return FALLBACK_MODELS
+            
+    except Exception as e:
+        logger.warning("Failed to fetch models from API (%s), using fallback list", e)
+        return FALLBACK_MODELS
+
+def get_default_chat_model() -> str:
+    """Returns the default chat model ID."""
+    # Prefer gemini-2.5-flash if available, otherwise try to use the main LLM's model
+    if "gemini-2.5-flash" in [m["id"] for m in get_chat_model_options()]:
+        return "gemini-2.5-flash"
+    elif USE_GEMINI and llm:
+        try:
+            # The model name might be in the format 'models/gemini-1.5-flash-latest'
+            # We need to extract just the model ID
+            model_name = getattr(llm, '_model_name', None) or 'gemini-1.5-flash'
+            if model_name.startswith('models/'):
+                model_name = model_name.replace('models/', '')
+            # Remove '-latest' suffix if present
+            if model_name.endswith('-latest'):
+                model_name = model_name.replace('-latest', '')
+            return model_name
+        except Exception:
+            pass
+    
+    # Fallback to a reliable default
+    return "gemini-2.5-flash"
