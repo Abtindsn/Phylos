@@ -105,8 +105,20 @@ MODEL_LABEL_OVERRIDES = {
     "gemini-1.5-pro": "Gemini 1.5 Pro",
     "gemini-1.5-pro-latest": "Gemini 1.5 Pro",
     "gemini-2.0-flash-exp": "Gemini 2.0 Flash (Experimental)",
+    "gemini-2.0-flash": "Gemini 2.0 Flash",
+    "gemini-2.0-flash-lite": "Gemini 2.0 Flash Lite",
+    "gemini-2.0-flash-lite-preview": "Gemini 2.0 Flash Lite (Preview)",
+    "gemini-2.0-flash-thinking": "Gemini 2.0 Flash Thinking",
+    "gemini-2.0-flash-thinking-exp": "Gemini 2.0 Flash Thinking (Experimental)",
+    "gemini-2.0-flash-thinking-exp-01-21": "Gemini 2.0 Flash Thinking (Exp 01-21)",
+    "gemini-2.0-pro": "Gemini 2.0 Pro",
+    "gemini-2.0-pro-exp": "Gemini 2.0 Pro (Experimental)",
+    "gemini-2.0-pro-exp-02-05": "Gemini 2.0 Pro (Exp 02-05)",
     "gemini-1.0-pro": "Gemini 1.0 Pro",
     "gemini-pro": "Gemini Pro",
+    "gemini-3.0": "Gemini 3.0",
+    "gemini-3.0-flash": "Gemini 3.0 Flash",
+    "gemini-3.0-pro": "Gemini 3.0 Pro",
 }
 
 def _prettify_model_label(name: str) -> str:
@@ -131,9 +143,26 @@ DEFAULT_CHAT_MODEL = _normalize_model_name(os.getenv("PHYLOS_DEFAULT_CHAT_MODEL"
 if not DEFAULT_CHAT_MODEL:
     DEFAULT_CHAT_MODEL = "gemini-pro"
 
+_default_fallback_order = [
+    "gemini-2.0-flash",
+    "gemini-2.0-flash-lite",
+    "gemini-2.0-flash-lite-preview",
+    "gemini-2.0-flash-thinking",
+    "gemini-2.0-flash-thinking-exp-01-21",
+    "gemini-2.0-flash-exp",
+    "gemini-2.0-pro",
+    "gemini-2.0-pro-exp-02-05",
+    "gemini-3.0",
+    "gemini-3.0-flash",
+    "gemini-3.0-pro",
+    "gemini-1.5-pro",
+    "gemini-1.5-flash-8b",
+    "gemini-1.0-pro",
+    "gemini-pro",
+]
 _fallback_env = os.getenv(
     "PHYLOS_CHAT_MODEL_FALLBACKS",
-    "gemini-2.0-flash-exp,gemini-1.5-pro,gemini-1.5-flash-8b,gemini-1.0-pro,gemini-pro",
+    ",".join(_default_fallback_order),
 )
 CHAT_MODEL_FALLBACKS = _unique_preserve(
     _normalize_model_name(item.strip())
@@ -620,8 +649,6 @@ def get_chat_model_options() -> List[Dict[str, str]]:
         })
 
     for candidate in _model_priority():
-        if known and candidate not in known:
-            continue
         _append(candidate)
 
     if not options and known:
