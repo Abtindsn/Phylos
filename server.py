@@ -188,7 +188,7 @@ def _sanitize_payload(value, depth=0):
 class ChatRequest(BaseModel):
     question: str
     session_id: str
-    model: Optional[str] = "gemini-1.5-flash-latest"
+    model: Optional[str] = None
 
 def _create_session() -> tuple[str, Dict[str, Any]]:
     session_id = str(uuid.uuid4())
@@ -279,7 +279,7 @@ def _generate_graph_summary(graph: Dict[str, Any]) -> str:
     """
     return generate_text_response(prompt, fallback)
 
-def _generate_chat_reply(summary: str, history: List[Dict[str, str]], question: str, model_name: str = "gemini-1.5-flash-latest") -> str:
+def _generate_chat_reply(summary: str, history: List[Dict[str, str]], question: str, model_name: Optional[str] = None) -> str:
     summary_preview = _shorten(summary, 220)
     fallback = "I'm having trouble connecting to the AI right now. Please try asking again in a moment."
     
@@ -605,6 +605,8 @@ from graph_builder import (
     generate_origin_insight,
     calculate_semantic_drift,
     ECO_MODE,
+    get_chat_model_options,
+    get_default_chat_model,
 )
 
 # --- Session Storage ---
@@ -1409,6 +1411,16 @@ async def get_classic():
     """Serves the classic console UI."""
     return HTMLResponse(CLASSIC_HTML)
 
+@api.get("/models")
+async def list_models():
+    """Returns chat-capable Gemini models that the backend can access."""
+    options = get_chat_model_options()
+    default_model = get_default_chat_model()
+    return {
+        "models": options,
+        "default": default_model,
+    }
+
 @api.post("/chat")
 async def chat_endpoint(request: ChatRequest):
     """Handles follow-up chat requests about the latest trace summary."""
@@ -1422,7 +1434,13 @@ async def chat_endpoint(request: ChatRequest):
     session_data.setdefault("history", []).append({"role": "user", "content": request.question})
     
     # Generate reply
-    reply = _generate_chat_reply(session_data["summary"], session_data["history"], request.question, request.model)
+    model_choice = request.model or get_default_chat_model()
+    reply = _generate_chat_reply(
+        session_data["summary"],
+        session_data["history"],
+        request.question,
+        model_choice,
+    )
     
     # Update history with assistant's reply
     session_data["history"].append({"role": "assistant", "content": reply})

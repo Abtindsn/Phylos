@@ -186,6 +186,12 @@
           overflow: 'hidden',
         });
 
+        const FALLBACK_MODEL_OPTIONS = [
+          { id: 'gemini-1.5-flash', label: 'Gemini 1.5 Flash' },
+          { id: 'gemini-1.5-pro', label: 'Gemini 1.5 Pro' },
+          { id: 'gemini-2.0-flash-exp', label: 'Gemini 2.0 Flash (Exp)' },
+        ];
+
         const formatPercent = (value) => (
           typeof value === 'number' ? `${(value * 100).toFixed(1)}%` : 'n/a'
         );
@@ -245,7 +251,8 @@
           const [url, setUrl] = useState('');
           const [maxDepth, setMaxDepth] = useState(3);
           const [isAnalyzing, setIsAnalyzing] = useState(false);
-          const [selectedModel, setSelectedModel] = React.useState('gemini-1.5-flash-latest');
+          const [modelOptions, setModelOptions] = useState(FALLBACK_MODEL_OPTIONS);
+          const [selectedModel, setSelectedModel] = useState(FALLBACK_MODEL_OPTIONS[0]?.id || '');
           const [graphData, setGraphData] = useState({ nodes: [], edges: [], origin: {}, timeline: [] });
           const [timelineEntries, setTimelineEntries] = useState([]);
           const timelineRef = useRef(null);
@@ -266,6 +273,40 @@
               if (wsRef.current) {
                 wsRef.current.close();
               }
+            };
+          }, []);
+
+          useEffect(() => {
+            let cancelled = false;
+            const hydrateModels = async () => {
+              try {
+                const response = await fetch('/models');
+                if (!response.ok) {
+                  throw new Error('Failed to fetch models');
+                }
+                const payload = await response.json();
+                if (cancelled) return;
+                const options = Array.isArray(payload.models) && payload.models.length
+                  ? payload.models
+                  : FALLBACK_MODEL_OPTIONS;
+                setModelOptions(options);
+                const defaultChoice = payload.default && options.some((opt) => opt.id === payload.default)
+                  ? payload.default
+                  : (options[0]?.id || FALLBACK_MODEL_OPTIONS[0]?.id || '');
+                setSelectedModel((prev) => (
+                  prev && options.some((opt) => opt.id === prev)
+                    ? prev
+                    : defaultChoice
+                ));
+              } catch (error) {
+                if (cancelled) return;
+                setModelOptions((prev) => prev.length ? prev : FALLBACK_MODEL_OPTIONS);
+                setSelectedModel((prev) => prev || (FALLBACK_MODEL_OPTIONS[0]?.id || ''));
+              }
+            };
+            hydrateModels();
+            return () => {
+              cancelled = true;
             };
           }, []);
 
@@ -450,8 +491,8 @@
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
                   session_id: sessionId,
-                  question: chatInput,
-                  model: selectedModel
+                  question: message,
+                  model: selectedModel || undefined
                 }),
               });
               const payload = await response.json();
@@ -939,9 +980,15 @@
                           onChange={(e) => setSelectedModel(e.target.value)}
                           className="bg-black/40 border border-amber-900/40 text-amber-100/80 text-xs rounded-sm px-2 py-1 focus:outline-none focus:border-amber-700/60 font-mono"
                         >
-                          <option value="gemini-1.5-flash-latest">Flash (Fast)</option>
-                          <option value="gemini-2.0-flash-exp">Flash 2.0 (Exp)</option>
-                          <option value="gemini-1.5-pro-latest">Pro (Smart)</option>
+                          {modelOptions.map((option) => (
+                            <option
+                              key={option.id}
+                              value={option.id}
+                              disabled={option.available === false}
+                            >
+                              {option.label}{option.available === false ? ' (Locked)' : ''}
+                            </option>
+                          ))}
                         </select>
                       </div>
                       <div className="chat-messages mb-4 font-serif text-sm">
@@ -968,7 +1015,7 @@
                         />
                         <button
                           type="submit"
-                          disabled={!sessionId || !chatInput.trim()}
+                          disabled={!sessionId || !chatInput.trim() || !selectedModel}
                           className="px-3 py-2 bg-amber-800/80 rounded-sm text-amber-100 hover:bg-amber-700/80 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
                         >
                           <LucideIcon name="Send" className="w-4 h-4" />

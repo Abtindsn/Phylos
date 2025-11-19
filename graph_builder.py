@@ -11,7 +11,7 @@ import hashlib
 import difflib
 from concurrent.futures import ThreadPoolExecutor, TimeoutError
 from langgraph.graph import StateGraph, END
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 import google.generativeai as genai
 from dotenv import load_dotenv
 import logging
@@ -78,6 +78,109 @@ DISALLOWED_EXTENSIONS = {
 
 logger = logging.getLogger("phylos.graph")
 
+def _normalize_model_name(value: str | None) -> str | None:
+    if not value:
+        return None
+    name = value.strip().strip('"').strip("'")
+    if not name:
+        return None
+    if "/" in name:
+        name = name.split("/")[-1]
+    return name
+
+def _unique_preserve(values):
+    seen = set()
+    deduped = []
+    for item in values:
+        if not item or item in seen:
+            continue
+        seen.add(item)
+        deduped.append(item)
+    return deduped
+
+MODEL_LABEL_OVERRIDES = {
+    "gemini-1.5-flash": "Gemini 1.5 Flash",
+    "gemini-1.5-flash-latest": "Gemini 1.5 Flash",
+    "gemini-1.5-flash-8b": "Gemini 1.5 Flash 8B",
+    "gemini-1.5-pro": "Gemini 1.5 Pro",
+    "gemini-1.5-pro-latest": "Gemini 1.5 Pro",
+    "gemini-2.0-flash-exp": "Gemini 2.0 Flash (Experimental)",
+    "gemini-1.0-pro": "Gemini 1.0 Pro",
+    "gemini-pro": "Gemini Pro",
+}
+
+def _prettify_model_label(name: str) -> str:
+    if not name:
+        return "Gemini"
+    if name in MODEL_LABEL_OVERRIDES:
+        return MODEL_LABEL_OVERRIDES[name]
+    parts = name.replace("models/", "").replace("_", "-").split("-")
+    pretty = []
+    for part in parts:
+        if not part:
+            continue
+        if part.isdigit():
+            pretty.append(part)
+        elif len(part) == 1:
+            pretty.append(part.upper())
+        else:
+            pretty.append(part.capitalize())
+    return " ".join(pretty) or name
+
+DEFAULT_CHAT_MODEL = _normalize_model_name(os.getenv("PHYLOS_DEFAULT_CHAT_MODEL", "gemini-1.5-flash"))
+if not DEFAULT_CHAT_MODEL:
+    DEFAULT_CHAT_MODEL = "gemini-pro"
+
+_fallback_env = os.getenv(
+    "PHYLOS_CHAT_MODEL_FALLBACKS",
+    "gemini-2.0-flash-exp,gemini-1.5-pro,gemini-1.5-flash-8b,gemini-1.0-pro,gemini-pro",
+)
+CHAT_MODEL_FALLBACKS = _unique_preserve(
+    _normalize_model_name(item.strip())
+    for item in _fallback_env.split(",")
+    if item.strip()
+)
+AVAILABLE_GEMINI_MODELS: Dict[str, str] = {}
+_MODEL_CLIENTS: Dict[str, genai.GenerativeModel] = {}
+
+def _refresh_available_models() -> None:
+    if not USE_GEMINI:
+        return
+    try:
+        for model in genai.list_models():
+            name = _normalize_model_name(getattr(model, "name", None))
+            if not name:
+                continue
+            supported = set(getattr(model, "supported_generation_methods", []))
+            if "generateContent" not in supported:
+                continue
+            AVAILABLE_GEMINI_MODELS[name] = getattr(model, "display_name", name)
+    except Exception as exc:
+        logger.debug("Unable to list Gemini models: %s", exc)
+
+def _model_priority(preferred: str | None = None) -> List[str]:
+    return _unique_preserve(
+        [
+            _normalize_model_name(preferred),
+            DEFAULT_CHAT_MODEL,
+            *CHAT_MODEL_FALLBACKS,
+        ]
+    )
+
+def _get_model_client(name: str | None):
+    normalized = _normalize_model_name(name)
+    if not normalized:
+        return None
+    if normalized in _MODEL_CLIENTS:
+        return _MODEL_CLIENTS[normalized]
+    try:
+        client = genai.GenerativeModel(normalized)
+        _MODEL_CLIENTS[normalized] = client
+        return client
+    except Exception as exc:
+        logger.debug("Failed to initialize Gemini model %s: %s", normalized, exc)
+        return None
+
 if FORCE_OFFLINE:
     logger.info("Offline mode enforced via PHYLOS_OFFLINE flag.")
 
@@ -85,10 +188,12 @@ USE_GEMINI = bool(GEMINI_API_KEY) and not FORCE_OFFLINE
 
 if USE_GEMINI:
     genai.configure(api_key=GEMINI_API_KEY)
-    llm = genai.GenerativeModel('gemini-1.5-flash-latest')
+    _refresh_available_models()
+    llm = _get_model_client(DEFAULT_CHAT_MODEL)
     try:
         origin_llm = genai.GenerativeModel(ORIGIN_INSIGHT_MODEL_NAME)
-    except Exception:
+    except Exception as exc:
+        logger.warning("Unable to initialize origin insight model (%s). Falling back to stub.", exc)
         origin_llm = None
 else:
     if not GEMINI_API_KEY:
@@ -450,7 +555,7 @@ def summarize_mutation(parent_content: str, child_content: str) -> str:
 
     return generate_text_response(prompt, fallback)
 
-def generate_text_response(prompt: str, fallback: str, model_name: str = None) -> str:
+def generate_text_response(prompt: str, fallback: str, model_name: Optional[str] = None) -> str:
     """
     Generates a text response using the configured Gemini model.
     Allows overriding the default model via model_name.
@@ -458,16 +563,23 @@ def generate_text_response(prompt: str, fallback: str, model_name: str = None) -
     if not USE_GEMINI:
         return fallback
 
-    try:
-        # Use the requested model if provided, otherwise use the default llm
-        active_model = genai.GenerativeModel(model_name) if model_name else llm
-        response = active_model.generate_content(prompt)
-        if response.text:
-            return response.text
-        return fallback
-    except Exception as e:
-        logger.error("Gemini generation failed: %s", e)
-        return f"AI Error: {str(e)}" if "429" not in str(e) else fallback
+    attempt_errors = []
+    for candidate in _model_priority(model_name):
+        client = _get_model_client(candidate)
+        if not client:
+            continue
+        try:
+            response = client.generate_content(prompt)
+            if response and getattr(response, "text", None):
+                return response.text
+        except Exception as exc:
+            attempt_errors.append((candidate, str(exc)))
+            logger.warning("Gemini generation failed via %s: %s", candidate, exc)
+
+    if attempt_errors:
+        details = "; ".join(f"{name}: {err}" for name, err in attempt_errors)
+        logger.error("All Gemini model attempts failed. Using fallback. Details: %s", details)
+    return fallback
 
 def generate_origin_insight(prompt: str, fallback: str) -> str:
     """Uses a higher-context Gemini model for origin-difference analysis."""
@@ -486,6 +598,57 @@ def generate_origin_insight(prompt: str, fallback: str) -> str:
         _gemini_origin_available = False
         return fallback
 
+def get_chat_model_options() -> List[Dict[str, str]]:
+    """
+    Returns the list of chat-capable Gemini models prioritized by the current configuration.
+    Each entry includes an `id`, `label`, and `available` flag indicating whether the API
+    confirmed access to that model (if discoverable).
+    """
+    options: List[Dict[str, str]] = []
+    known = AVAILABLE_GEMINI_MODELS.copy()
+    seen: set[str] = set()
+
+    def _append(name: str):
+        if not name or name in seen:
+            return
+        seen.add(name)
+        label = known.get(name) or _prettify_model_label(name)
+        options.append({
+            "id": name,
+            "label": label,
+            "available": (not known) or (name in known),
+        })
+
+    for candidate in _model_priority():
+        if known and candidate not in known:
+            continue
+        _append(candidate)
+
+    if not options and known:
+        for name, label in known.items():
+            options.append({
+                "id": name,
+                "label": label,
+                "available": True,
+            })
+
+    if not options:
+        for candidate in _model_priority():
+            _append(candidate)
+
+    return options
+
+def get_default_chat_model() -> str | None:
+    """
+    Returns the preferred chat model id after filtering out unavailable options.
+    """
+    options = get_chat_model_options()
+    if not options:
+        return DEFAULT_CHAT_MODEL
+    for option in options:
+        if option.get("available", True):
+            return option["id"]
+    return options[0]["id"]
 
 # --- Graph Node Definitions ---
 
