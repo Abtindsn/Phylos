@@ -1,566 +1,713 @@
 <!-- UI Updated by Gemini -->
 <!DOCTYPE html>
 <html lang="en">
-  <head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Phylos Chronicle</title>
-    <link rel="preconnect" href="https://fonts.googleapis.com" />
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link href="https://fonts.googleapis.com/css2?family=UnifrakturMaguntia&family=Inter:wght@400;500;600;700&family=EB+Garamond:wght@400;500&display=swap" rel="stylesheet" />
-    <script src="https://cdn.tailwindcss.com"></script>
-    <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
-    <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
-    <script src="https://unpkg.com/lucide@latest"></script>
-    <style>
-      .summary-box {
-        padding: 12px;
-        border-radius: 12px;
-        background: rgba(255, 255, 255, 0.04);
-        min-height: 120px;
-        white-space: pre-wrap;
-      }
-      .chat-messages {
-        max-height: 240px;
-        overflow-y: auto;
-        display: flex;
-        flex-direction: column;
-        gap: 10px;
-        background: rgba(255, 255, 255, 0.02);
-        border: 1px solid rgba(255, 255, 255, 0.05);
-        border-radius: 12px;
-        padding: 12px;
-      }
-      .chat-entry {
-        display: flex;
-        gap: 10px;
-        align-items: flex-start;
-      }
-      .chat-entry.user {
-        flex-direction: row-reverse;
-        text-align: right;
-      }
-      .chat-entry .avatar {
-        width: 38px;
-        height: 38px;
-        border-radius: 50%;
-        background: rgba(255, 255, 255, 0.08);
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        font-weight: 600;
-        font-size: 0.85rem;
-      }
-      .chat-entry.user .avatar {
-        background: linear-gradient(135deg, #6dffd6, #2ba6ff);
-        color: #062335;
-      }
-      .chat-entry.assistant .avatar {
-        background: rgba(146, 112, 255, 0.35);
-        color: #ffffff;
-      }
-      .chat-entry.system .avatar {
-        background: rgba(255, 193, 59, 0.3);
-        color: #2d1a00;
-      }
-      .chat-entry .bubble {
-        border-radius: 16px;
-        padding: 10px 14px;
-        border: 1px solid rgba(255, 255, 255, 0.08);
-        background: rgba(255, 255, 255, 0.03);
-        max-width: 75%;
-      }
-      .chat-entry.user .bubble {
-        background: linear-gradient(135deg, rgba(109, 255, 214, 0.25), rgba(43, 166, 255, 0.2));
-        border-color: rgba(109, 255, 214, 0.4);
-      }
-      .chat-entry.assistant .bubble {
-        background: rgba(146, 112, 255, 0.18);
-        border-color: rgba(146, 112, 255, 0.4);
-      }
-      .chat-entry.system .bubble {
-        background: rgba(255, 193, 59, 0.15);
-        border-color: rgba(255, 193, 59, 0.4);
-      }
-    </style>
-  </head>
-  <body class="min-h-screen bg-gradient-to-b from-slate-900 via-blue-950 to-indigo-950 text-gray-100">
-    <div id="root"></div>
 
-    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
-    <script type="text/babel" data-presets="react">
-      (function() {
-        try {
-      const { useState, useEffect, useRef } = React;
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Phylos Chronicle</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link
+    href="https://fonts.googleapis.com/css2?family=UnifrakturMaguntia&family=Inter:wght@400;500;600;700&family=EB+Garamond:wght@400;500&display=swap"
+    rel="stylesheet" />
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+  <script src="https://unpkg.com/lucide@latest"></script>
+  <style>
+    .summary-box {
+      padding: 12px;
+      border-radius: 12px;
+      background: rgba(255, 255, 255, 0.04);
+      min-height: 120px;
+      white-space: pre-wrap;
+    }
 
-      const iconSlug = (name) =>
-        name
-          .replace(/([a-z0-9])([A-Z])/g, '$1-$2')
-          .replace(/([A-Za-z])(\d+)/g, '$1-$2')
-          .toLowerCase();
+    .chat-messages {
+      flex: 1;
+      overflow-y: auto;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      background: rgba(255, 255, 255, 0.02);
+      border: 1px solid rgba(255, 255, 255, 0.05);
+      border-radius: 12px;
+      padding: 12px;
+      min-height: 0;
+    }
 
-      const LucideIcon = ({ name, className }) => (
-        <i data-lucide={iconSlug(name)} className={className}></i>
-      );
+    .chat-entry {
+      display: flex;
+      gap: 10px;
+      align-items: flex-start;
+    }
 
-      const formatTimestamp = (timestamp) => {
-        if (!timestamp) return 'Unknown';
-        try {
-          return new Date(timestamp).toLocaleString();
-        } catch (err) {
-          return timestamp;
-        }
-      };
+    .chat-entry.user {
+      flex-direction: row-reverse;
+      text-align: right;
+    }
 
-      const buildMutationEvents = (edges = [], nodes = []) => {
-        const nodeMap = nodes.reduce((acc, node) => {
-          acc[node.id] = node;
-          return acc;
-        }, {});
-        return edges
-          .filter((edge) => edge.attributes?.relation_type === 'Mutation')
-          .sort((a, b) => (b.attributes?.mutation_score ?? 0) - (a.attributes?.mutation_score ?? 0))
-          .slice(0, 5)
-          .map((edge) => {
-            const nodeInfo = nodeMap[edge.target] || {};
+    .chat-entry .avatar {
+      width: 38px;
+      height: 38px;
+      border-radius: 50%;
+      background: rgba(255, 255, 255, 0.08);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-weight: 600;
+      font-size: 0.85rem;
+    }
+
+    .custom-scrollbar::-webkit-scrollbar-thumb {
+      background: linear-gradient(180deg, #92400e 0%, #78350f 100%);
+      border-radius: 4px;
+    }
+
+    /* Animated Background Effects */
+    @keyframes filmGrain {
+
+      0%,
+      100% {
+        transform: translate(0, 0);
+      }
+
+      10% {
+        transform: translate(-5%, -5%);
+      }
+
+      20% {
+        transform: translate(-10%, 5%);
+      }
+
+      30% {
+        transform: translate(5%, -10%);
+      }
+
+      40% {
+        transform: translate(-5%, 15%);
+      }
+
+      50% {
+        transform: translate(-15%, 5%);
+      }
+
+      60% {
+        transform: translate(15%, 0);
+      }
+
+      70% {
+        transform: translate(0, 10%);
+      }
+
+      80% {
+        transform: translate(-10%, 0);
+      }
+
+      90% {
+        transform: translate(10%, 5%);
+      }
+    }
+
+    @keyframes paperFloat {
+
+      0%,
+      100% {
+        transform: translateY(0) rotate(0deg);
+        opacity: 0.03;
+      }
+
+      50% {
+        transform: translateY(-20px) rotate(1deg);
+        opacity: 0.05;
+      }
+    }
+
+    @keyframes shadowPulse {
+
+      0%,
+      100% {
+        opacity: 0.15;
+      }
+
+      50% {
+        opacity: 0.25;
+      }
+    }
+
+    .film-grain-layer {
+      position: fixed;
+      inset: 0;
+      pointer-events: none;
+      z-index: 1;
+      opacity: 0.15;
+      background-image:
+        url("data:image/svg+xml,%3Csvg viewBox='0 0 400 400' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noiseFilter'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noiseFilter)'/%3E%3C/svg%3E");
+      animation: filmGrain 8s steps(10) infinite;
+    }
+
+    .vintage-paper-layer {
+      position: fixed;
+      inset: 0;
+      pointer-events: none;
+      z-index: 1;
+      background:
+        radial-gradient(ellipse at 20% 30%, rgba(120, 53, 15, 0.1) 0%, transparent 50%),
+        radial-gradient(ellipse at 80% 70%, rgba(146, 64, 14, 0.08) 0%, transparent 50%),
+        radial-gradient(ellipse at 50% 50%, rgba(0, 0, 0, 0.05) 0%, transparent 70%);
+      animation: paperFloat 20s ease-in-out infinite;
+    }
+
+    .shadow-pulse-layer {
+      position: fixed;
+      inset: 0;
+      pointer-events: none;
+      z-index: 1;
+      background: radial-gradient(ellipse at center, transparent 0%, rgba(0, 0, 0, 0.3) 100%);
+      animation: shadowPulse 15s ease-in-out infinite;
+    }
+
+    .chat-entry.assistant .avatar {
+      background: rgba(146, 112, 255, 0.35);
+      color: #ffffff;
+    }
+
+    .chat-entry.system .avatar {
+      background: rgba(255, 193, 59, 0.3);
+      color: #2d1a00;
+    }
+
+    .chat-entry .bubble {
+      border-radius: 16px;
+      padding: 10px 14px;
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      background: rgba(255, 255, 255, 0.03);
+      max-width: 85%;
+      word-break: break-word;
+      overflow-wrap: break-word;
+    }
+
+    .chat-entry.user .bubble {
+      background: linear-gradient(135deg, rgba(109, 255, 214, 0.25), rgba(43, 166, 255, 0.2));
+      border-color: rgba(109, 255, 214, 0.4);
+    }
+
+    .chat-entry.assistant .bubble {
+      background: rgba(146, 112, 255, 0.18);
+      border-color: rgba(146, 112, 255, 0.4);
+    }
+
+    .chat-entry.system .bubble {
+      background: rgba(255, 193, 59, 0.15);
+      border-color: rgba(255, 193, 59, 0.4);
+    }
+  </style>
+</head>
+
+<body class="min-h-screen bg-gradient-to-b from-slate-900 via-blue-950 to-indigo-950 text-gray-100">
+  <div id="root"></div>
+
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <script type="text/babel" data-presets="react">
+    (function () {
+      try {
+        const { useState, useEffect, useRef } = React;
+
+        const iconSlug = (name) =>
+          name
+            .replace(/([a-z0-9])([A-Z])/g, '$1-$2')
+            .replace(/([A-Za-z])(\d+)/g, '$1-$2')
+            .toLowerCase();
+
+        const LucideIcon = ({ name, className }) => (
+          <i data-lucide={iconSlug(name)} className={className}></i>
+        );
+
+        const formatTimestamp = (timestamp) => {
+          if (!timestamp) return 'Unknown';
+          try {
+            return new Date(timestamp).toLocaleString();
+          } catch (err) {
+            return timestamp;
+          }
+        };
+
+        const buildMutationEvents = (edges = [], nodes = []) => {
+          const nodeMap = nodes.reduce((acc, node) => {
+            acc[node.id] = node;
+            return acc;
+          }, {});
+          return edges
+            .filter((edge) => edge.attributes?.relation_type === 'Mutation')
+            .sort((a, b) => (b.attributes?.mutation_score ?? 0) - (a.attributes?.mutation_score ?? 0))
+            .slice(0, 5)
+            .map((edge) => {
+              const nodeInfo = nodeMap[edge.target] || {};
+              return {
+                node: edge.target,
+                score: edge.attributes?.mutation_score ?? 0,
+                type: 'mutation',
+                timestamp: nodeInfo.timestamp || 'N/A',
+                title: nodeInfo.content?.slice(0, 80) || edge.target,
+                url: nodeInfo.url || edge.target,
+              };
+            });
+        };
+
+        const DEPTH_CHOICES = [1, 2, 3, 4, 5, 6];
+
+        const normalizeWhitespace = (text = '') => text.replace(/\s+/g, ' ').trim();
+
+        const extractHeadline = (content, fallback = '') => {
+          if (!content) return fallback;
+          const lines = content.split('\n').map((line) => line.trim()).filter(Boolean);
+          return lines[0] || fallback;
+        };
+
+        const extractSummary = (content) => {
+          if (!content) return '';
+          const [body] = content.split('Referenced URLs:');
+          const normalized = normalizeWhitespace(body);
+          if (normalized.length <= 220) {
+            return normalized;
+          }
+          return `${normalized.slice(0, 220)}…`;
+        };
+
+        const extractReferences = (links) => {
+          if (!Array.isArray(links)) {
+            return [];
+          }
+          return links.map((link) => (typeof link === 'string' ? link.trim() : '')).filter(Boolean);
+        };
+
+        const clampStyle = (lines) => ({
+          display: '-webkit-box',
+          WebkitLineClamp: lines,
+          WebkitBoxOrient: 'vertical',
+          overflow: 'hidden',
+        });
+
+        const formatPercent = (value) => (
+          typeof value === 'number' ? `${(value * 100).toFixed(1)}%` : 'n/a'
+        );
+
+        const parseTimestamp = (value) => {
+          const ts = Date.parse(value);
+          return Number.isNaN(ts) ? null : ts;
+        };
+
+        const enrichNodes = (graph) => {
+          const edges = graph.edges || [];
+          const scoreMap = edges.reduce((acc, edge) => {
+            if (edge.target) {
+              acc[edge.target] = edge.attributes?.mutation_score ?? 0;
+            }
+            return acc;
+          }, {});
+          const rawNodes = Array.isArray(graph.nodes) ? graph.nodes : [];
+          const mapped = rawNodes.map((node) => {
+            const id = node.id;
+            const mutationScore = typeof node.mutation_score === 'number'
+              ? node.mutation_score
+              : (scoreMap[id] ?? 0);
+            const references = extractReferences(node.outbound_links).slice(0, 12);
             return {
-              node: edge.target,
-              score: edge.attributes?.mutation_score ?? 0,
-              type: 'mutation',
-              timestamp: nodeInfo.timestamp || 'N/A',
-              title: nodeInfo.content?.slice(0, 80) || edge.target,
-              url: nodeInfo.url || edge.target,
+              id,
+              title: extractHeadline(node.content, id),
+              summary: extractSummary(node.content),
+              url: id,
+              mutationScore,
+              timestamp: node.timestamp,
+              timestampValue: parseTimestamp(node.timestamp),
+              author: node.author || 'Unknown',
+              depth: node.depth || 0,
+              content: node.content || '',
+              references,
+              originSimilarity: typeof node.origin_similarity === 'number' ? node.origin_similarity : null,
+              originDifference: typeof node.origin_difference === 'number' ? node.origin_difference : (
+                typeof node.origin_similarity === 'number' ? 1 - node.origin_similarity : null
+              ),
+              originSummary: node.origin_summary || null,
             };
           });
-      };
+          return mapped.sort((a, b) => {
+            const ta = a.timestampValue;
+            const tb = b.timestampValue;
+            if (ta === null && tb === null) {
+              return a.title.localeCompare(b.title);
+            }
+            if (ta === null) return 1;
+            if (tb === null) return -1;
+            return ta - tb;
+          });
+        };
 
-      const DEPTH_CHOICES = [1, 2, 3, 4, 5, 6];
+        function PhylosUI() {
+          const [url, setUrl] = useState('');
+          const [maxDepth, setMaxDepth] = useState(3);
+          const [isAnalyzing, setIsAnalyzing] = useState(false);
+          const [selectedModel, setSelectedModel] = React.useState('gemini-1.5-flash');
+          const [graphData, setGraphData] = useState({ nodes: [], edges: [], origin: {}, timeline: [] });
+          const [timelineEntries, setTimelineEntries] = useState([]);
+          const timelineRef = useRef(null);
+          const [selectedNode, setSelectedNode] = useState(null);
+          const [mutationEvents, setMutationEvents] = useState([]);
+          const [telemetry, setTelemetry] = useState({ events: 0, nodes: 0, mutations: 0, replications: 0 });
+          const [summary, setSummary] = useState('Submit a URL to begin a trace.');
+          const [sessionId, setSessionId] = useState(null);
+          const [chatMessages, setChatMessages] = useState([
+            { role: 'system', text: 'Submit a source URL and select "Trace Origin" to begin.' },
+          ]);
+          const [chatInput, setChatInput] = useState('');
+          const wsRef = useRef(null);
+          const chatEndRef = useRef(null);
 
-      const normalizeWhitespace = (text = '') => text.replace(/\s+/g, ' ').trim();
+          useEffect(() => {
+            return () => {
+              if (wsRef.current) {
+                wsRef.current.close();
+              }
+            };
+          }, []);
 
-      const extractHeadline = (content, fallback = '') => {
-        if (!content) return fallback;
-        const lines = content.split('\n').map((line) => line.trim()).filter(Boolean);
-        return lines[0] || fallback;
-      };
+          // useEffect(() => {
+          //   if (window.lucide && typeof window.lucide.createIcons === 'function') {
+          //     window.lucide.createIcons();
+          //   }
+          // });
 
-      const extractSummary = (content) => {
-        if (!content) return '';
-        const [body] = content.split('Referenced URLs:');
-        const normalized = normalizeWhitespace(body);
-        if (normalized.length <= 220) {
-          return normalized;
-        }
-        return `${normalized.slice(0, 220)}…`;
-      };
-
-      const extractReferences = (links) => {
-        if (!Array.isArray(links)) {
-          return [];
-        }
-        return links.map((link) => (typeof link === 'string' ? link.trim() : '')).filter(Boolean);
-      };
-
-      const clampStyle = (lines) => ({
-        display: '-webkit-box',
-        WebkitLineClamp: lines,
-        WebkitBoxOrient: 'vertical',
-        overflow: 'hidden',
-      });
-
-      const formatPercent = (value) => (
-        typeof value === 'number' ? `${(value * 100).toFixed(1)}%` : 'n/a'
-      );
-
-      const parseTimestamp = (value) => {
-        const ts = Date.parse(value);
-        return Number.isNaN(ts) ? null : ts;
-      };
-
-      const enrichNodes = (graph) => {
-        const edges = graph.edges || [];
-        const scoreMap = edges.reduce((acc, edge) => {
-          if (edge.target) {
-            acc[edge.target] = edge.attributes?.mutation_score ?? 0;
-          }
-          return acc;
-        }, {});
-        const rawNodes = Array.isArray(graph.nodes) ? graph.nodes : [];
-        const mapped = rawNodes.map((node) => {
-          const id = node.id;
-          const mutationScore = typeof node.mutation_score === 'number'
-            ? node.mutation_score
-            : (scoreMap[id] ?? 0);
-          const references = extractReferences(node.outbound_links).slice(0, 12);
-          return {
-            id,
-            title: extractHeadline(node.content, id),
-            summary: extractSummary(node.content),
-            url: id,
-            mutationScore,
-            timestamp: node.timestamp,
-            timestampValue: parseTimestamp(node.timestamp),
-            author: node.author || 'Unknown',
-            depth: node.depth || 0,
-            content: node.content || '',
-            references,
-            originSimilarity: typeof node.origin_similarity === 'number' ? node.origin_similarity : null,
-            originDifference: typeof node.origin_difference === 'number' ? node.origin_difference : (
-              typeof node.origin_similarity === 'number' ? 1 - node.origin_similarity : null
-            ),
-            originSummary: node.origin_summary || null,
+          const appendMessage = (role, text) => {
+            setChatMessages((prev) => [...prev, { role, text }]);
           };
-        });
-        return mapped.sort((a, b) => {
-          const ta = a.timestampValue;
-          const tb = b.timestampValue;
-          if (ta === null && tb === null) {
-            return a.title.localeCompare(b.title);
-          }
-          if (ta === null) return 1;
-          if (tb === null) return -1;
-          return ta - tb;
-        });
-      };
 
-      function PhylosUI() {
-        const [url, setUrl] = useState('');
-        const [maxDepth, setMaxDepth] = useState(3);
-        const [isAnalyzing, setIsAnalyzing] = useState(false);
-        const [graphData, setGraphData] = useState({ nodes: [], edges: [], origin: {}, timeline: [] });
-        const [timelineEntries, setTimelineEntries] = useState([]);
-        const timelineRef = useRef(null);
-        const [selectedNode, setSelectedNode] = useState(null);
-        const [mutationEvents, setMutationEvents] = useState([]);
-        const [telemetry, setTelemetry] = useState({ events: 0, nodes: 0, mutations: 0, replications: 0 });
-        const [summary, setSummary] = useState('Submit a URL to begin a trace.');
-        const [sessionId, setSessionId] = useState(null);
-        const [chatMessages, setChatMessages] = useState([
-          { role: 'system', text: 'Submit a source URL and select "Trace Origin" to begin.' },
-        ]);
-        const [chatInput, setChatInput] = useState('');
-        const wsRef = useRef(null);
+          useEffect(() => {
+            if (timelineRef.current) {
+              timelineRef.current.scrollTop = timelineRef.current.scrollHeight;
+            }
+          }, [timelineEntries]);
 
-        useEffect(() => {
-          return () => {
+          useEffect(() => {
+            if (chatEndRef.current) {
+              chatEndRef.current.scrollIntoView({ behavior: "smooth" });
+            }
+          }, [chatMessages]);
+
+          const fetchGraphSnapshot = async (id) => {
+            try {
+              const response = await fetch(`/session/${id}/graph`);
+              if (!response.ok) {
+                throw new Error('Failed to load graph snapshot');
+              }
+              const payload = await response.json();
+              const enrichedNodes = enrichNodes(payload);
+              const timeline = payload.investigation_timeline || [];
+              setGraphData({
+                nodes: enrichedNodes,
+                edges: payload.edges || [],
+                origin: payload.origin || {},
+                timeline,
+              });
+              setTimelineEntries(timeline);
+              if (enrichedNodes.length) {
+                setSelectedNode(enrichedNodes[0]);
+              }
+              setMutationEvents(buildMutationEvents(payload.edges, enrichedNodes));
+              setTelemetry((prev) => ({
+                ...prev,
+                nodes: payload.stats?.nodes ?? prev.nodes,
+                mutations: payload.stats?.mutations ?? prev.mutations,
+                replications: payload.stats?.replications ?? prev.replications,
+              }));
+            } catch (error) {
+              console.error(error);
+              appendMessage('system', 'Unable to load final graph snapshot.');
+            }
+          };
+
+          const handleSocketMessage = (message) => {
+            if (message.status) {
+              if (message.status === 'session') {
+                setSessionId(message.session_id);
+                appendMessage('system', `Session established (${message.session_id.slice(0, 8)}…).`);
+                return;
+              }
+              if (message.status === 'summary') {
+                setSummary(message.summary || 'Summary unavailable.');
+                appendMessage('assistant', 'Trace complete. Ask me what you would like to investigate.');
+                setIsAnalyzing(false);
+                if (message.session_id) {
+                  fetchGraphSnapshot(message.session_id);
+                } else if (sessionId) {
+                  fetchGraphSnapshot(sessionId);
+                }
+                return;
+              }
+              if (message.status === 'investigation') {
+                const entry = message.entry;
+                if (entry) {
+                  setTimelineEntries((prev) => {
+                    const next = [...prev, entry];
+                    setGraphData((current) => current ? { ...current, timeline: next } : current);
+                    return next;
+                  });
+                }
+                return;
+              }
+              if (message.status === 'investigation_update') {
+                const entry = message.entry;
+                if (entry) {
+                  setTimelineEntries((prev) => {
+                    const updated = prev.map((item) =>
+                      item.id === entry.id ? { ...item, ...entry } : item
+                    );
+                    setGraphData((current) => current ? { ...current, timeline: updated } : current);
+                    return updated;
+                  });
+                }
+                return;
+              }
+              if (message.status === 'info') {
+                appendMessage('system', message.message || 'Info update received.');
+                return;
+              }
+              if (message.status === 'error') {
+                appendMessage('system', message.message || 'An error occurred.');
+                setIsAnalyzing(false);
+                return;
+              }
+            }
+
+            if (message.event) {
+              const data = message.data || {};
+              const knowledgeGraph = data.knowledge_graph || {};
+              const edgeStats = data.edge_stats || {};
+              setTelemetry((prev) => {
+                const nodeCount = typeof knowledgeGraph.node_count === 'number' ? knowledgeGraph.node_count : prev.nodes;
+                const mutationIncrement = typeof edgeStats.mutation_count === 'number' ? edgeStats.mutation_count : 0;
+                const replicationIncrement = typeof edgeStats.replication_count === 'number' ? edgeStats.replication_count : 0;
+                return {
+                  events: prev.events + 1,
+                  nodes: Math.max(prev.nodes, nodeCount),
+                  mutations: prev.mutations + mutationIncrement,
+                  replications: prev.replications + replicationIncrement,
+                };
+              });
+            }
+          };
+
+          const startAnalysis = () => {
+            if (!url || isAnalyzing) return;
+            const normalizedDepth = Math.min(6, Math.max(1, Number(maxDepth) || 1));
+            if (normalizedDepth !== maxDepth) {
+              setMaxDepth(normalizedDepth);
+            }
+            setIsAnalyzing(true);
+            setGraphData({ nodes: [], edges: [], origin: {}, timeline: [] });
+            setTimelineEntries([]);
+            setSelectedNode(null);
+            setMutationEvents([]);
+            setTelemetry({ events: 0, nodes: 0, mutations: 0, replications: 0 });
+            setSummary('Tracing narrative lineage...');
+            setChatMessages([{ role: 'system', text: 'Investigation running… chat will unlock once complete.' }]);
             if (wsRef.current) {
               wsRef.current.close();
             }
-          };
-        }, []);
+            const protocol = window.location.protocol === 'https:' ? 'wss' : 'ws';
+            const wsUrl = `${protocol}://${window.location.host}/ws/dna-stream`;
+            const ws = new WebSocket(wsUrl);
+            wsRef.current = ws;
 
-        // useEffect(() => {
-        //   if (window.lucide && typeof window.lucide.createIcons === 'function') {
-        //     window.lucide.createIcons();
-        //   }
-        // });
-
-        const appendMessage = (role, text) => {
-          setChatMessages((prev) => [...prev, { role, text }]);
-        };
-
-        useEffect(() => {
-          if (timelineRef.current) {
-            timelineRef.current.scrollTop = timelineRef.current.scrollHeight;
-          }
-        }, [timelineEntries]);
-
-        const fetchGraphSnapshot = async (id) => {
-          try {
-            const response = await fetch(`/session/${id}/graph`);
-            if (!response.ok) {
-              throw new Error('Failed to load graph snapshot');
-            }
-            const payload = await response.json();
-            const enrichedNodes = enrichNodes(payload);
-            const timeline = payload.investigation_timeline || [];
-            setGraphData({
-              nodes: enrichedNodes,
-              edges: payload.edges || [],
-              origin: payload.origin || {},
-              timeline,
-            });
-            setTimelineEntries(timeline);
-            if (enrichedNodes.length) {
-              setSelectedNode(enrichedNodes[0]);
-            }
-            setMutationEvents(buildMutationEvents(payload.edges, enrichedNodes));
-            setTelemetry((prev) => ({
-              ...prev,
-              nodes: payload.stats?.nodes ?? prev.nodes,
-              mutations: payload.stats?.mutations ?? prev.mutations,
-              replications: payload.stats?.replications ?? prev.replications,
-            }));
-          } catch (error) {
-            console.error(error);
-            appendMessage('system', 'Unable to load final graph snapshot.');
-          }
-        };
-
-        const handleSocketMessage = (message) => {
-          if (message.status) {
-            if (message.status === 'session') {
-              setSessionId(message.session_id);
-              appendMessage('system', `Session established (${message.session_id.slice(0, 8)}…).`);
-              return;
-            }
-            if (message.status === 'summary') {
-              setSummary(message.summary || 'Summary unavailable.');
-              appendMessage('assistant', 'Trace complete. Ask me what you would like to investigate.');
+            ws.onopen = () => {
+              ws.send(JSON.stringify({ start_url: url, max_depth: normalizedDepth }));
+            };
+            ws.onmessage = (event) => {
+              try {
+                const payload = JSON.parse(event.data);
+                handleSocketMessage(payload);
+              } catch (error) {
+                console.error('Failed to parse WebSocket message', error);
+              }
+            };
+            ws.onerror = () => {
+              appendMessage('system', 'WebSocket error encountered.');
               setIsAnalyzing(false);
-              if (message.session_id) {
-                fetchGraphSnapshot(message.session_id);
-              } else if (sessionId) {
-                fetchGraphSnapshot(sessionId);
-              }
-              return;
-            }
-            if (message.status === 'investigation') {
-              const entry = message.entry;
-              if (entry) {
-                setTimelineEntries((prev) => {
-                  const next = [...prev, entry];
-                  setGraphData((current) => current ? { ...current, timeline: next } : current);
-                  return next;
-                });
-              }
-              return;
-            }
-            if (message.status === 'investigation_update') {
-              const entry = message.entry;
-              if (entry) {
-                setTimelineEntries((prev) => {
-                  const updated = prev.map((item) =>
-                    item.id === entry.id ? { ...item, ...entry } : item
-                  );
-                  setGraphData((current) => current ? { ...current, timeline: updated } : current);
-                  return updated;
-                });
-              }
-              return;
-            }
-            if (message.status === 'info') {
-              appendMessage('system', message.message || 'Info update received.');
-              return;
-            }
-            if (message.status === 'error') {
-              appendMessage('system', message.message || 'An error occurred.');
+            };
+            ws.onclose = () => {
               setIsAnalyzing(false);
+            };
+          };
+
+          const sendChatMessage = async (evt) => {
+            evt.preventDefault();
+            if (!chatInput.trim() || !sessionId) {
               return;
             }
-          }
-
-          if (message.event) {
-            const data = message.data || {};
-            const knowledgeGraph = data.knowledge_graph || {};
-            const edgeStats = data.edge_stats || {};
-            setTelemetry((prev) => {
-              const nodeCount = typeof knowledgeGraph.node_count === 'number' ? knowledgeGraph.node_count : prev.nodes;
-              const mutationIncrement = typeof edgeStats.mutation_count === 'number' ? edgeStats.mutation_count : 0;
-              const replicationIncrement = typeof edgeStats.replication_count === 'number' ? edgeStats.replication_count : 0;
-              return {
-                events: prev.events + 1,
-                nodes: Math.max(prev.nodes, nodeCount),
-                mutations: prev.mutations + mutationIncrement,
-                replications: prev.replications + replicationIncrement,
-              };
-            });
-          }
-        };
-
-        const startAnalysis = () => {
-          if (!url || isAnalyzing) return;
-          const normalizedDepth = Math.min(6, Math.max(1, Number(maxDepth) || 1));
-          if (normalizedDepth !== maxDepth) {
-            setMaxDepth(normalizedDepth);
-          }
-          setIsAnalyzing(true);
-          setGraphData({ nodes: [], edges: [], origin: {}, timeline: [] });
-          setTimelineEntries([]);
-          setSelectedNode(null);
-          setMutationEvents([]);
-          setTelemetry({ events: 0, nodes: 0, mutations: 0, replications: 0 });
-          setSummary('Tracing narrative lineage...');
-          setChatMessages([{ role: 'system', text: 'Investigation running… chat will unlock once complete.' }]);
-          if (wsRef.current) {
-            wsRef.current.close();
-          }
-          const protocol = window.location.protocol === 'https:' ? 'wss' : 'ws';
-          const wsUrl = `${protocol}://${window.location.host}/ws/dna-stream`;
-          const ws = new WebSocket(wsUrl);
-          wsRef.current = ws;
-
-          ws.onopen = () => {
-            ws.send(JSON.stringify({ start_url: url, max_depth: normalizedDepth }));
-          };
-          ws.onmessage = (event) => {
+            const message = chatInput.trim();
+            setChatInput('');
+            appendMessage('user', message);
             try {
-              const payload = JSON.parse(event.data);
-              handleSocketMessage(payload);
+              const response = await fetch('/chat', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  session_id: sessionId,
+                  question: chatInput,
+                  model: selectedModel
+                }),
+              });
+              const payload = await response.json();
+              if (!response.ok) {
+                appendMessage('system', payload.detail || 'Chat failed.');
+                return;
+              }
+              appendMessage('assistant', payload.reply || 'I need more context.');
             } catch (error) {
-              console.error('Failed to parse WebSocket message', error);
+              appendMessage('system', 'Unable to reach chat endpoint.');
             }
           };
-          ws.onerror = () => {
-            appendMessage('system', 'WebSocket error encountered.');
-            setIsAnalyzing(false);
+
+          const getMutationColor = (score) => {
+            if (score < 0.2) return 'bg-emerald-800';
+            if (score < 0.5) return 'bg-amber-700';
+            return 'bg-red-900';
           };
-          ws.onclose = () => {
-            setIsAnalyzing(false);
+
+          const getMutationLabel = (score) => {
+            if (score < 0.2) return 'Authentic';
+            if (score < 0.5) return 'Modified';
+            return 'Corrupted';
           };
-        };
 
-        const sendChatMessage = async (evt) => {
-          evt.preventDefault();
-          if (!chatInput.trim() || !sessionId) {
-            return;
-          }
-          const message = chatInput.trim();
-          setChatInput('');
-          appendMessage('user', message);
-          try {
-            const response = await fetch('/chat', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ session_id: sessionId, message }),
-            });
-            const payload = await response.json();
-            if (!response.ok) {
-              appendMessage('system', payload.detail || 'Chat failed.');
-              return;
-            }
-            appendMessage('assistant', payload.reply || 'I need more context.');
-          } catch (error) {
-            appendMessage('system', 'Unable to reach chat endpoint.');
-          }
-        };
+          const averageMutation = graphData?.nodes?.length
+            ? graphData.nodes.reduce((acc, node) => acc + (node.mutationScore || 0), 0) / graphData.nodes.length
+            : 0;
+          const earliestNode = graphData?.nodes?.[0] || null;
+          const originMatchScore = earliestNode?.originSimilarity ?? null;
 
-        const getMutationColor = (score) => {
-          if (score < 0.2) return 'bg-emerald-800';
-          if (score < 0.5) return 'bg-amber-700';
-          return 'bg-red-900';
-        };
+          return (
+            <div className="min-h-screen bg-gradient-to-b from-slate-900 via-blue-950 to-indigo-950 text-gray-100">
+              {/* Animated Background Layers */}
+              <div className="film-grain-layer" />
+              <div className="vintage-paper-layer" />
+              <div className="shadow-pulse-layer" />
 
-        const getMutationLabel = (score) => {
-          if (score < 0.2) return 'Authentic';
-          if (score < 0.5) return 'Modified';
-          return 'Corrupted';
-        };
+              {/* Static newspaper texture overlay */}
+              <div className="fixed inset-0 opacity-5 pointer-events-none" style={{
+                backgroundImage: `url("data:image/svg+xml,%3Csvg width='100' height='100' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' /%3E%3C/filter%3E%3Crect width='100' height='100' filter='url(%23noise)' opacity='0.4'/%3E%3C/svg%3E")`,
+                zIndex: 2
+              }} />
 
-        const averageMutation = graphData?.nodes?.length
-          ? graphData.nodes.reduce((acc, node) => acc + (node.mutationScore || 0), 0) / graphData.nodes.length
-          : 0;
-        const earliestNode = graphData?.nodes?.[0] || null;
-        const originMatchScore = earliestNode?.originSimilarity ?? null;
-
-        return (
-          <div className="min-h-screen bg-gradient-to-b from-slate-900 via-blue-950 to-indigo-950 text-gray-100">
-            {/* Newspaper texture overlay */}
-            <div className="fixed inset-0 opacity-5 pointer-events-none" style={{
-              backgroundImage: `url("data:image/svg+xml,%3Csvg width='100' height='100' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' /%3E%3C/filter%3E%3Crect width='100' height='100' filter='url(%23noise)' opacity='0.4'/%3E%3C/svg%3E")`
-            }} />
-
-            {/* Header with old newspaper masthead style */}
-            <div className="border-b-4 border-amber-800/30 bg-black/40 backdrop-blur-sm relative overflow-hidden">
-              <div className="absolute inset-0 bg-gradient-to-r from-transparent via-amber-900/5 to-transparent" />
-              <div className="max-w-7xl mx-auto px-6 py-6 relative">
-                <div className="text-center border-b border-amber-800/20 pb-4 mb-4">
-                  <div className="flex items-center justify-center gap-3 mb-2">
-                    <div className="h-px w-20 bg-gradient-to-r from-transparent to-amber-700/50" />
-                    <LucideIcon name="Newspaper" className="w-5 h-5 text-amber-700/70" />
-                    <div className="h-px w-20 bg-gradient-to-l from-transparent to-amber-700/50" />
-                  </div>
-                  <h1 className="text-6xl mb-2 text-amber-100/90 tracking-wide" style={{ 
-                    fontFamily: '"UnifrakturMaguntia", "Old English Text MT", "Blackletter", serif',
-                    textShadow: '2px 2px 4px rgba(0,0,0,0.7)',
-                    fontWeight: 400
-                  }}>
-                    Phylos
-                  </h1>
-                  <style>{`
+              {/* Header with old newspaper masthead style */}
+              <div className="border-b-4 border-amber-800/30 bg-black/40 backdrop-blur-sm relative overflow-hidden">
+                <div className="absolute inset-0 bg-gradient-to-r from-transparent via-amber-900/5 to-transparent" />
+                <div className="w-full mx-auto px-3 py-6 relative">
+                  <div className="text-center border-b border-amber-800/20 pb-4 mb-4">
+                    <div className="flex items-center justify-center gap-3 mb-2">
+                      <div className="h-px w-20 bg-gradient-to-r from-transparent to-amber-700/50" />
+                      <LucideIcon name="Newspaper" className="w-5 h-5 text-amber-700/70" />
+                      <div className="h-px w-20 bg-gradient-to-l from-transparent to-amber-700/50" />
+                    </div>
+                    <h1 className="text-6xl mb-2 text-amber-100/90 tracking-wide" style={{
+                      fontFamily: '"UnifrakturMaguntia", "Old English Text MT", "Blackletter", serif',
+                      textShadow: '2px 2px 4px rgba(0,0,0,0.7)',
+                      fontWeight: 400
+                    }}>
+                      Phylos
+                    </h1>
+                    <style>{`
                     @import url('https://fonts.googleapis.com/css2?family=UnifrakturMaguntia&display=swap');
                   `}</style>
-                  <div className="flex items-center justify-center gap-2 text-xs text-amber-700/70 uppercase tracking-widest">
-                    <div className="h-px w-12 bg-amber-800/30" />
-                    <span>Narrative Evolution Chronicle</span>
-                    <div className="h-px w-12 bg-amber-800/30" />
+                    <div className="flex items-center justify-center gap-2 text-xs text-amber-700/70 uppercase tracking-widest">
+                      <div className="h-px w-12 bg-amber-800/30" />
+                      <span>Narrative Evolution Chronicle</span>
+                      <div className="h-px w-12 bg-amber-800/30" />
+                    </div>
                   </div>
-                </div>
-                <p className="text-center text-sm text-amber-200/60 italic font-serif">
-                  "Tracing the Lineage of Truth Through the Shadows of Disinformation"
-                </p>
-              </div>
-            </div>
-
-            <div className="max-w-7xl mx-auto px-6 py-8 relative">
-              {/* Search Section - styled like a classified ad box */}
-              <div className="mb-8">
-                <div className="bg-gradient-to-br from-slate-800/60 to-slate-900/80 rounded-sm p-8 border-4 border-double border-amber-900/40 backdrop-blur-sm shadow-2xl relative">
-                  <div className="absolute top-4 left-4 text-6xl text-amber-900/10 font-serif">"</div>
-                  <div className="absolute bottom-4 right-4 text-6xl text-amber-900/10 font-serif">"</div>
-                  
-                  <div className="flex items-center gap-3 mb-4">
-                    <LucideIcon name="Eye" className="w-5 h-5 text-amber-700" />
-                    <h2 className="text-xl font-serif text-amber-100/90">Investigation Desk</h2>
-                  </div>
-                  <p className="text-amber-200/60 mb-6 text-sm font-serif italic">
-                    Submit a source URL to trace its narrative mutations across the information network
+                  <p className="text-center text-sm text-amber-200/60 italic font-serif">
+                    "Tracing the Lineage of Truth Through the Shadows of Disinformation"
                   </p>
-                  
-                  <div className="flex flex-col gap-3 lg:flex-row">
-                    <div className="flex-1 relative">
-                      <LucideIcon name="Search" className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-amber-700/50" />
-                      <input
-                        type="text"
-                        value={url}
-                        onChange={(e) => setUrl(e.target.value)}
-                        placeholder="https://source-article.com/original-story"
-                        className="w-full bg-black/60 border-2 border-amber-900/40 rounded-sm px-12 py-4 text-amber-100 placeholder-amber-700/40 focus:outline-none focus:border-amber-700/60 focus:ring-2 focus:ring-amber-700/20 font-mono text-sm"
-                        onKeyPress={(e) => e.key === 'Enter' && startAnalysis()}
-                      />
-                    </div>
-                    <div className="w-full lg:w-48 flex flex-col text-xs font-serif text-amber-200/70">
-                      <span className="uppercase tracking-widest text-amber-600 mb-1">Depth Limit</span>
-                      <select
-                        value={maxDepth}
-                        onChange={(e) => setMaxDepth(Math.min(6, Math.max(1, Number(e.target.value) || 1)))}
-                        className="bg-black/60 border-2 border-amber-900/40 rounded-sm px-3 py-3 text-amber-100 focus:outline-none focus:border-amber-700/60 focus:ring-2 focus:ring-amber-700/20 font-mono text-sm"
-                      >
-                        {DEPTH_CHOICES.map((depth) => (
-                          <option key={depth} value={depth}>
-                            {depth} hop{depth > 1 ? 's' : ''}
-                          </option>
-                        ))}
-                      </select>
-                      <span className="text-[0.7rem] text-amber-200/50 mt-1">
-                        Controls how far the crawler branches out (default 3).
-                      </span>
-                    </div>
-                    <button
-                      onClick={startAnalysis}
-                      disabled={isAnalyzing || !url}
-                      className="w-full lg:w-auto px-8 py-4 bg-gradient-to-b from-amber-800 to-amber-900 rounded-sm font-serif uppercase text-sm tracking-wider hover:from-amber-700 hover:to-amber-800 disabled:opacity-50 disabled:cursor-not-allowed transition-all flex items-center justify-center gap-2 shadow-lg border border-amber-700/50"
-                    >
-                      {isAnalyzing ? (
-                        <>
-                          <div className="w-5 h-5 border-2 border-amber-200/30 border-t-amber-200 rounded-full animate-spin" />
-                          Investigating
-                        </>
-                      ) : (
-                        <>
-                          <LucideIcon name="Zap" className="w-5 h-5" />
-                          Trace Origin
-                        </>
-                      )}
-                    </button>
-                  </div>
                 </div>
               </div>
 
-              {/* Results Grid */}
-              <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+              <div className="w-full mx-auto px-3 py-8 relative">
+                {/* Search Section - styled like a classified ad box */}
+                <div className="mb-8">
+                  <div className="bg-gradient-to-br from-slate-800/60 to-slate-900/80 rounded-sm p-8 border-4 border-double border-amber-900/40 backdrop-blur-sm shadow-2xl relative">
+                    <div className="absolute top-4 left-4 text-6xl text-amber-900/10 font-serif">"</div>
+                    <div className="absolute bottom-4 right-4 text-6xl text-amber-900/10 font-serif">"</div>
+
+                    <div className="flex items-center gap-3 mb-4">
+                      <LucideIcon name="Eye" className="w-5 h-5 text-amber-700" />
+                      <h2 className="text-xl font-serif text-amber-100/90">Investigation Desk</h2>
+                    </div>
+                    <p className="text-amber-200/60 mb-6 text-sm font-serif italic">
+                      Submit a source URL to trace its narrative mutations across the information network
+                    </p>
+
+                    <div className="flex flex-col gap-3 lg:flex-row items-start">
+                      <div className="flex-1 flex flex-col">
+                        <span className="text-xs font-serif text-amber-200/70 uppercase tracking-widest text-amber-600 mb-1">Target Source</span>
+                        <div className="relative w-full">
+                          <LucideIcon name="Search" className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-amber-700/50" />
+                          <input
+                            type="text"
+                            value={url}
+                            onChange={(e) => setUrl(e.target.value)}
+                            placeholder="https://source-article.com/original-story"
+                            className="w-full bg-black/60 border-2 border-amber-900/40 rounded-sm px-12 py-4 text-amber-100 placeholder-amber-700/40 focus:outline-none focus:border-amber-700/60 focus:ring-2 focus:ring-amber-700/20 font-mono text-sm"
+                            onKeyPress={(e) => e.key === 'Enter' && startAnalysis()}
+                          />
+                        </div>
+                      </div>
+
+                      <div className="w-full lg:w-48 flex flex-col text-xs font-serif text-amber-200/70">
+                        <span className="uppercase tracking-widest text-amber-600 mb-1">Depth Limit</span>
+                        <select
+                          value={maxDepth}
+                          onChange={(e) => setMaxDepth(Math.min(6, Math.max(1, Number(e.target.value) || 1)))}
+                          className="bg-black/60 border-2 border-amber-900/40 rounded-sm px-3 py-4 text-amber-100 focus:outline-none focus:border-amber-700/60 focus:ring-2 focus:ring-amber-700/20 font-mono text-sm"
+                        >
+                          {DEPTH_CHOICES.map((depth) => (
+                            <option key={depth} value={depth}>
+                              {depth} hop{depth > 1 ? 's' : ''}
+                            </option>
+                          ))}
+                        </select>
+                        <span className="text-[0.7rem] text-amber-200/50 mt-1">
+                          Controls how far the crawler branches out (default 3).
+                        </span>
+                      </div>
+
+                      <div className="w-full lg:w-auto flex flex-col">
+                        <span className="text-xs font-serif text-amber-200/70 uppercase tracking-widest text-amber-600 mb-1 opacity-0">Action</span>
+                        <button
+                          onClick={startAnalysis}
+                          disabled={isAnalyzing || !url}
+                          className="w-full lg:w-auto px-8 py-4 bg-gradient-to-b from-amber-800 to-amber-900 rounded-sm font-serif uppercase text-sm tracking-wider hover:from-amber-700 hover:to-amber-800 disabled:opacity-50 disabled:cursor-not-allowed transition-all flex items-center justify-center gap-2 shadow-lg border border-amber-700/50"
+                        >
+                          {isAnalyzing ? (
+                            <>
+                              <div className="w-5 h-5 border-2 border-amber-200/30 border-t-amber-200 rounded-full animate-spin" />
+                              Investigating
+                            </>
+                          ) : (
+                            <>
+                              <LucideIcon name="Zap" className="w-5 h-5" />
+                              Trace Origin
+                            </>
+                          )}
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Results Grid */}
+                <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
                   {/* Graph Visualization - styled like newspaper columns */}
-                  <div className="lg:col-span-2 bg-gradient-to-br from-slate-900/80 to-slate-800/60 rounded-sm p-6 border-2 border-amber-900/30 backdrop-blur-sm shadow-2xl">
+                  <div className="lg:col-span-1 bg-gradient-to-br from-slate-900/80 to-slate-800/60 rounded-sm p-6 border-2 border-amber-900/30 backdrop-blur-sm shadow-2xl">
                     <div className="border-b-2 border-amber-900/30 pb-4 mb-6">
                       <div className="flex items-center justify-between">
                         <div className="flex items-center gap-3">
@@ -597,18 +744,16 @@
                                 target="_blank"
                                 rel="noopener noreferrer"
                                 onClick={() => setSelectedNode(node)}
-                                className={`block p-5 border-2 cursor-pointer transition-all ${
-                                  selectedNode?.id === node.id
-                                    ? 'bg-amber-900/20 border-amber-700/60 shadow-lg'
-                                    : 'bg-black/30 border-amber-900/30 hover:border-amber-800/50 hover:bg-amber-950/20'
-                                }`}
+                                className={`block p-5 border-2 cursor-pointer transition-all ${selectedNode?.id === node.id
+                                  ? 'bg-amber-900/20 border-amber-700/60 shadow-lg'
+                                  : 'bg-black/30 border-amber-900/30 hover:border-amber-800/50 hover:bg-amber-950/20'
+                                  }`}
                               >
                                 <div className="flex items-start gap-4">
-                                  <div className={`w-14 h-14 ${getMutationColor(node.mutationScore)} border-2 ${
-                                    node.mutationScore < 0.2 ? 'border-emerald-600' :
+                                  <div className={`w-14 h-14 ${getMutationColor(node.mutationScore)} border-2 ${node.mutationScore < 0.2 ? 'border-emerald-600' :
                                     node.mutationScore < 0.5 ? 'border-amber-500' :
-                                    'border-red-700'
-                                  } flex items-center justify-center flex-shrink-0 shadow-lg`}>
+                                      'border-red-700'
+                                    } flex items-center justify-center flex-shrink-0 shadow-lg`}>
                                     {node.mutationScore < 0.2 ? (
                                       <LucideIcon name="Shield" className="w-7 h-7 text-emerald-100" />
                                     ) : node.mutationScore < 0.5 ? (
@@ -636,11 +781,10 @@
                                           {node.summary || 'Summary unavailable.'}
                                         </p>
                                       </div>
-                                      <span className={`text-xs px-3 py-1 border-2 ml-4 ${
-                                        node.mutationScore < 0.2 ? 'bg-emerald-900/40 border-emerald-700 text-emerald-200' :
+                                      <span className={`text-xs px-3 py-1 border-2 ml-4 ${node.mutationScore < 0.2 ? 'bg-emerald-900/40 border-emerald-700 text-emerald-200' :
                                         node.mutationScore < 0.5 ? 'bg-amber-900/40 border-amber-700 text-amber-200' :
-                                        'bg-red-900/40 border-red-700 text-red-200'
-                                      } font-serif uppercase tracking-wider`}>
+                                          'bg-red-900/40 border-red-700 text-red-200'
+                                        } font-serif uppercase tracking-wider`}>
                                         {getMutationLabel(node.mutationScore)}
                                       </span>
                                       {idx === 0 && (
@@ -678,7 +822,7 @@
                                   </div>
                                   <div className="flex-1 bg-black/40 border border-amber-900/40 p-4 text-sm text-amber-100/80 font-serif">
                                     <span className="block text-xs uppercase text-amber-400 tracking-wide mb-1">Gemini insight</span>
-                                    <p style={clampStyle(4)}>
+                                    <p style={{ ...clampStyle(4), wordBreak: 'break-word', overflowWrap: 'break-word' }}>
                                       {nextNode.originSummary || 'Origin comparison unavailable.'}
                                     </p>
                                   </div>
@@ -695,9 +839,9 @@
                     </div>
                   </div>
 
-                  {/* Sidebar - styled like newspaper sidebars */}
-                  <div className="space-y-6">
-                    {/* Stats Box */}
+                  {/* Middle Column - Investigation Data */}
+                  <div className="flex flex-col gap-6 h-[calc(100vh-140px)] sticky top-6 overflow-y-auto pr-2 custom-scrollbar">
+                    {/* Investigation Report */}
                     <div className="bg-gradient-to-br from-slate-900/80 to-slate-800/60 rounded-sm p-6 border-2 border-amber-900/30 backdrop-blur-sm shadow-2xl">
                       <h3 className="text-lg font-serif text-amber-100/90 mb-4 pb-2 border-b-2 border-amber-900/30 flex items-center gap-2">
                         <LucideIcon name="Activity" className="w-5 h-5 text-amber-700" />
@@ -835,11 +979,10 @@
                             <div className="flex items-center gap-3">
                               <div className="flex-1 h-3 bg-black/40 border border-amber-900/30 overflow-hidden">
                                 <div
-                                  className={`h-full ${getMutationColor(selectedNode.mutationScore)} border-r-2 ${
-                                    selectedNode.mutationScore < 0.2 ? 'border-emerald-500' :
+                                  className={`h-full ${getMutationColor(selectedNode.mutationScore)} border-r-2 ${selectedNode.mutationScore < 0.2 ? 'border-emerald-500' :
                                     selectedNode.mutationScore < 0.5 ? 'border-amber-500' :
-                                    'border-red-500'
-                                  }`}
+                                      'border-red-500'
+                                    }`}
                                   style={{ width: `${selectedNode.mutationScore * 100}%` }}
                                 />
                               </div>
@@ -890,69 +1033,121 @@
                       </div>
                     )}
                   </div>
+
+                  {/* Right Column - Chat Interface */}
+                  <div className="flex flex-col gap-6 h-[calc(100vh-140px)] sticky top-6">
+                    <div className="flex-1 flex flex-col min-h-0 bg-gradient-to-br from-slate-900/80 to-slate-800/60 rounded-sm p-6 border-2 border-amber-900/30 backdrop-blur-sm shadow-2xl">
+                      <div className="flex items-center justify-between mb-4 pb-2 border-b-2 border-amber-900/30">
+                        <h3 className="text-lg font-serif text-amber-100/90 flex items-center gap-2">
+                          <LucideIcon name="MessageSquare" className="w-5 h-5 text-amber-500" />
+                          Chat with Gemini
+                        </h3>
+                        <select
+                          value={selectedModel}
+                          onChange={(e) => setSelectedModel(e.target.value)}
+                          className="bg-black/40 border border-amber-900/40 text-amber-100/80 text-xs rounded-sm px-2 py-1 focus:outline-none focus:border-amber-700/60 font-mono"
+                        >
+                          <option value="gemini-1.5-flash">Flash (Fast)</option>
+                          <option value="gemini-2.0-flash-exp">Flash 2.0 (Exp)</option>
+                          <option value="gemini-1.5-pro">Pro (Smart)</option>
+                        </select>
+                      </div>
+                      <div className="chat-messages mb-4 font-serif text-sm">
+                        {chatMessages.map((msg, i) => (
+                          <div key={i} className={`chat-entry ${msg.role}`}>
+                            <div className="avatar">
+                              {msg.role === 'user' ? 'You' : msg.role === 'assistant' ? 'AI' : 'Sys'}
+                            </div>
+                            <div className="bubble">
+                              {msg.text}
+                            </div>
+                          </div>
+                        ))}
+                        <div ref={chatEndRef} />
+                      </div>
+                      <form onSubmit={sendChatMessage} className="flex gap-2">
+                        <input
+                          type="text"
+                          value={chatInput}
+                          onChange={(e) => setChatInput(e.target.value)}
+                          placeholder="Ask about the investigation..."
+                          disabled={!sessionId}
+                          className="flex-1 bg-black/40 border border-amber-900/40 rounded-sm px-3 py-2 text-amber-100 text-sm focus:outline-none focus:border-amber-700/60"
+                        />
+                        <button
+                          type="submit"
+                          disabled={!sessionId || !chatInput.trim()}
+                          className="px-3 py-2 bg-amber-800/80 rounded-sm text-amber-100 hover:bg-amber-700/80 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                        >
+                          <LucideIcon name="Send" className="w-4 h-4" />
+                        </button>
+                      </form>
+                    </div>
+                  </div>
                 </div>
 
-              {isAnalyzing && (
-                <div className="text-center py-20">
-                  <div className="w-32 h-32 bg-amber-950/20 border-4 border-double border-amber-900/40 flex items-center justify-center mx-auto mb-6">
-                    <LucideIcon name="Newspaper" className="w-16 h-16 text-amber-700/40 animate-pulse" />
+                {isAnalyzing && (
+                  <div className="text-center py-20">
+                    <div className="w-32 h-32 bg-amber-950/20 border-4 border-double border-amber-900/40 flex items-center justify-center mx-auto mb-6">
+                      <LucideIcon name="Newspaper" className="w-16 h-16 text-amber-700/40 animate-pulse" />
+                    </div>
+                    <h3 className="text-2xl font-serif text-amber-200/70 mb-3">
+                      Investigating...
+                    </h3>
+                    <p className="text-amber-400/50 text-sm font-serif italic max-w-md mx-auto">
+                      Tracing the narrative evolution through the shadows of the information age...
+                    </p>
                   </div>
-                  <h3 className="text-2xl font-serif text-amber-200/70 mb-3">
-                    Investigating...
-                  </h3>
-                  <p className="text-amber-400/50 text-sm font-serif italic max-w-md mx-auto">
-                    Tracing the narrative evolution through the shadows of the information age...
+                )}
+
+                {/* Empty State - styled like a missing persons ad */}
+                {(!graphData.nodes.length) && !isAnalyzing && (
+                  <div className="text-center py-20">
+                    <div className="w-32 h-32 bg-amber-950/20 border-4 border-double border-amber-900/40 flex items-center justify-center mx-auto mb-6">
+                      <LucideIcon name="Newspaper" className="w-16 h-16 text-amber-700/40" />
+                    </div>
+                    <h3 className="text-2xl font-serif text-amber-200/70 mb-3">
+                      Awaiting Investigation
+                    </h3>
+                    <p className="text-amber-400/50 text-sm font-serif italic max-w-md mx-auto">
+                      Submit a source article above to begin tracing its narrative evolution through the shadows of the information age
+                    </p>
+                    <div className="mt-6 flex items-center justify-center gap-2">
+                      <div className="h-px w-20 bg-gradient-to-r from-transparent to-amber-800/30" />
+                      <span className="text-xs text-amber-700/50 font-serif">◆</span>
+                      <div className="h-px w-20 bg-gradient-to-l from-transparent to-amber-800/30" />
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* Footer */}
+              <div className="border-t-2 border-amber-900/30 bg-black/40 mt-12">
+                <div className="max-w-7xl mx-auto px-6 py-4 text-center">
+                  <p className="text-xs text-amber-700/60 font-serif italic">
+                    Est. 2025 • Phylos Chronicle • Shedding Light on Digital Shadows
                   </p>
                 </div>
-              )}
-
-              {/* Empty State - styled like a missing persons ad */}
-              {(!graphData.nodes.length) && !isAnalyzing && (
-                <div className="text-center py-20">
-                  <div className="w-32 h-32 bg-amber-950/20 border-4 border-double border-amber-900/40 flex items-center justify-center mx-auto mb-6">
-                    <LucideIcon name="Newspaper" className="w-16 h-16 text-amber-700/40" />
-                  </div>
-                  <h3 className="text-2xl font-serif text-amber-200/70 mb-3">
-                    Awaiting Investigation
-                  </h3>
-                  <p className="text-amber-400/50 text-sm font-serif italic max-w-md mx-auto">
-                    Submit a source article above to begin tracing its narrative evolution through the shadows of the information age
-                  </p>
-                  <div className="mt-6 flex items-center justify-center gap-2">
-                    <div className="h-px w-20 bg-gradient-to-r from-transparent to-amber-800/30" />
-                    <span className="text-xs text-amber-700/50 font-serif">◆</span>
-                    <div className="h-px w-20 bg-gradient-to-l from-transparent to-amber-800/30" />
-                  </div>
-                </div>
-              )}
-            </div>
-
-            {/* Footer */}
-            <div className="border-t-2 border-amber-900/30 bg-black/40 mt-12">
-              <div className="max-w-7xl mx-auto px-6 py-4 text-center">
-                <p className="text-xs text-amber-700/60 font-serif italic">
-                  Est. 2025 • Phylos Chronicle • Shedding Light on Digital Shadows
-                </p>
               </div>
             </div>
-          </div>
-        );
-      }
+          );
+        }
 
-      const root = document.getElementById('root');
-      if (root) {
-        ReactDOM.render(React.createElement(PhylosUI), root);
-      }
-    } catch (error) {
-          const root = document.getElementById('root');
-          if (root) {
-            root.innerHTML = `<div style="padding:16px;color:#fee;background:#7a0f0f;border:2px solid #ff5b5b;font-family:monospace;">
+        const root = document.getElementById('root');
+        if (root) {
+          ReactDOM.render(React.createElement(PhylosUI), root);
+        }
+      } catch (error) {
+        const root = document.getElementById('root');
+        if (root) {
+          root.innerHTML = `<div style="padding:16px;color:#fee;background:#7a0f0f;border:2px solid #ff5b5b;font-family:monospace;">
               UI failed to load:<br>${error.message}
             </div>`;
-          }
-          console.error("Phylos Chronicle UI error:", error);
         }
-      })();
-    </script>
-  </body>
+        console.error("Phylos Chronicle UI error:", error);
+      }
+    })();
+  </script>
+</body>
+
 </html>

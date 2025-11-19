@@ -4,7 +4,7 @@
 
 import os
 import uuid
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 import json
 import logging
 from pathlib import Path
@@ -186,8 +186,9 @@ def _sanitize_payload(value, depth=0):
     return str(value)
 
 class ChatRequest(BaseModel):
+    question: str
     session_id: str
-    message: str
+    model: Optional[str] = "gemini-1.5-flash"
 
 def _create_session() -> tuple[str, Dict[str, Any]]:
     session_id = str(uuid.uuid4())
@@ -247,6 +248,22 @@ def _generate_graph_summary(graph: Dict[str, Any]) -> str:
             score_text = "-"
         edge_lines.append(f"{edge['source']} -> {edge['target']} ({rel}, score {score_text})")
     edge_snippet = "; ".join(edge_lines) if edge_lines else "No mutation edges captured."
+    
+    if ECO_MODE:
+        # Zero-Token Summary Template
+        avg_score = sum(e["score"] for e in sample_edges if isinstance(e["score"], (int, float))) / len(sample_edges) if sample_edges else 0.0
+        hotspots = "\n".join([f"- {e['source']} -> {e['target']} (Score: {e['score']:.2f})" for e in sample_edges[:3]])
+        return (
+            f"**Data Report (Eco Mode)**\n\n"
+            f"**Trace Statistics:**\n"
+            f"- Unique Sources: {node_count}\n"
+            f"- Narrative Connections: {edge_count}\n"
+            f"- Avg Mutation Score: {avg_score:.2f}\n\n"
+            f"**Top Mutation Hotspots:**\n"
+            f"{hotspots or 'None detected.'}\n\n"
+            f"*Note: This is an automated data report. Ask the chat assistant for deeper analysis.*"
+        )
+
     fallback = (
         f"The trace captured {node_count} unique sources tied together by {edge_count} narrative relationships. "
         f"Mutation hotspots observed along: {edge_snippet}. Use these as jumping-off points for deeper review."
@@ -262,13 +279,10 @@ def _generate_graph_summary(graph: Dict[str, Any]) -> str:
     """
     return generate_text_response(prompt, fallback)
 
-def _generate_chat_reply(summary: str, history: List[Dict[str, str]], question: str) -> str:
+def _generate_chat_reply(summary: str, history: List[Dict[str, str]], question: str, model_name: str = "gemini-1.5-flash") -> str:
     summary_preview = _shorten(summary, 220)
-    fallback = (
-        f"Here's what the trace uncovered: {summary_preview} "
-        f"In response to your question \"{question}\", focus on the mutations mentioned above—they mark where the narrative diverges most. "
-        "Trace those sources to validate their claims or find corroborating evidence."
-    )
+    fallback = "I'm having trouble connecting to the AI right now. Please try asking again in a moment."
+    
     history_text = "\n".join(f"{item['role']}: {item['content']}" for item in history[-6:])
     prompt = f"""
     You are Gemini acting as an investigative analyst. Use the summary below to answer follow-up questions.
@@ -283,7 +297,7 @@ def _generate_chat_reply(summary: str, history: List[Dict[str, str]], question: 
 
     Respond concisely (<=120 words) and suggest next investigative steps when useful.
     """
-    return generate_text_response(prompt, fallback)
+    return generate_text_response(prompt, fallback, model_name=model_name)
 
 def _collect_edges_from_section(section: Any) -> List[Dict[str, Any]]:
     edges: List[Dict[str, Any]] = []
@@ -392,16 +406,66 @@ def _fallback_origin_summary(origin_text: str, node_text: str, article_title: st
 
 def _summarize_origin_difference(origin_text: str, node_text: str, article_title: str | None = None) -> tuple[str, str | None]:
     """
-    TEMP DEBUG IMPLEMENTATION
-    This bypasses Gemini entirely so we can verify which backend is serving the UI.
+    Generates a differential analysis between the origin and the current node using Gemini.
+    Returns (public_summary, private_investigation).
     """
     if not origin_text or not node_text:
         return "", None
 
     fallback_summary, fallback_hidden = _fallback_origin_summary(origin_text, node_text, article_title)
-    summary = f"[DEBUG SUMMARY] {article_title or 'Unknown'} :: {fallback_summary}"
-    hidden = f"[DEBUG HIDDEN] {fallback_hidden}"
-    return summary, hidden
+    
+    # Construct the prompt with the user's specific instructions
+    prompt = (
+        "Primary Objective: You are an elite Signal Investigator performing a forensic, differential analysis "
+        "between the ORIGINAL STORY and the FOLLOW-UP ARTICLE shown below. Your task is to isolate verifiable Signal "
+        "(facts, causal intent) from Noise (editorial tone, omissions) and reconstruct how and why the narrative evolved.\n\n"
+        "Respond STRICTLY in compact JSON with two string fields only: "
+        "{\"summary\": \"public-facing insight\", \"investigation\": \"private chain-of-investigation\"}.\n\n"
+        "SUMMARY (2-3 sentences) must:\n"
+        " • Describe the Core Power (facts shared across both pieces) and highlight the most significant Δ (difference).\n"
+        " • State whether the follow-up reinforces, contradicts, or reframes the original, referencing the source host.\n"
+        "INVESTIGATION (3-4 sentences, hidden) must follow the First-Principles playbook:\n"
+        " • Evidence Set & Source Profiles (identify URLs + timestamps, biases).\n"
+        " • Commonality Grid (Shared facts) and Discrepancy Matrix items labeled Δ_F, Δ_I, Δ_P.\n"
+        " • Hypothesis testing: propose at least two motives for the change, then argue which is superior using the evidence.\n"
+        " • Explicitly define Signal vs. Noise in your reasoning and reference the original URLs when citing evidence.\n"
+        "No steps may be skipped.\n\n"
+        "ORIGINAL STORY:\n"
+        f"{origin_text[:3000]}\n\n"
+        "FOLLOW-UP ARTICLE:\n"
+        f"{node_text[:3000]}\n"
+    )
+
+    # Call Gemini
+    response_text = generate_origin_insight(prompt, fallback_summary)
+    logger.info("Gemini Raw Response: %s", response_text)
+    
+    # Parse the response
+    parsed = _parse_insight_json(response_text)
+    logger.info("Parsed JSON: %s", parsed)
+    
+    if parsed and isinstance(parsed, dict):
+        summary = parsed.get("summary")
+        investigation = parsed.get("investigation")
+        
+        # If we got valid JSON but empty fields, fall back
+        if not summary:
+            summary = fallback_summary
+        if not investigation:
+            investigation = fallback_hidden
+            
+        logger.info("Returning parsed - Summary: %s, Investigation: %s", summary, investigation)
+        return summary, investigation
+
+    # If parsing failed or returned raw text that isn't JSON (which shouldn't happen with the prompt but might)
+    # We check if the response looks like it failed to be JSON but is still usable text
+    if response_text and response_text.strip() != fallback_summary.strip():
+         # If it's just text, treat it as the summary and use fallback for investigation
+         logger.info("Parsing failed but text differs from fallback. Using raw text as summary.")
+         return response_text, fallback_hidden
+
+    logger.info("Using fallback summary and hidden.")
+    return fallback_summary, fallback_hidden
 
 def _build_node_snapshots(
     graph: Dict[str, Any],
@@ -444,6 +508,14 @@ def _build_node_snapshots(
                 entry["origin_summary"] = "Reference article supplied as the starting point."
                 entry["origin_hidden_reason"] = "Origin node – investigation not needed."
                 continue
+            # If we have origin text, try to get an insight
+            if ECO_MODE:
+                # In Eco Mode, skip the LLM call
+                summary, hidden = _fallback_origin_summary(origin_text, entry["content"], entry.get("title"))
+                entry["origin_summary"] = summary
+                entry["origin_hidden_reason"] = hidden
+                continue
+
             try:
                 article_title = entry.get("title") or entry.get("id")
                 summary, hidden = _summarize_origin_difference(origin_text, entry["content"], article_title)
@@ -467,16 +539,19 @@ def _build_investigation_entry(origin: dict | None, article: dict | None, rapid:
         summary, hidden = _fallback_origin_summary(origin_content, article_content, title)
     else:
         summary, hidden = _summarize_origin_difference(origin_content, article_content, title)
-    if not hidden or hidden.strip() == summary.strip():
+    
+    # Only overwrite hidden if it is strictly None or empty string
+    if not hidden:
         host = _short_host(article.get("id")) or "source"
         hidden = f"Internal investigation note: awaiting deeper comparison for {host}."
+
     entry = {
         "id": article.get("id"),
         "title": title or article.get("id"),
         "timestamp": article.get("timestamp"),
         "summary": summary,
-        "reason": hidden or summary,
-        "investigation": hidden or summary,
+        "reason": hidden,
+        "investigation": hidden,
         "url": article.get("id"),
     }
     return entry
@@ -529,6 +604,7 @@ from graph_builder import (
     generate_text_response,
     generate_origin_insight,
     calculate_semantic_drift,
+    ECO_MODE,
 )
 
 # --- Session Storage ---
@@ -1305,7 +1381,7 @@ CLASSIC_HTML = """
                     const response = await fetch('/chat', {
                         method: 'POST',
                         headers: {'Content-Type': 'application/json'},
-                        body: JSON.stringify({session_id: currentSessionId, message}),
+                        body: JSON.stringify({session_id: currentSessionId, question: message}), // Changed 'message' to 'question'
                     });
                     const data = await response.json();
                     if (!response.ok) {
@@ -1336,16 +1412,20 @@ async def get_classic():
 @api.post("/chat")
 async def chat_endpoint(request: ChatRequest):
     """Handles follow-up chat requests about the latest trace summary."""
-    context = SESSION_CONTEXTS.get(request.session_id)
-    if not context:
+    session_data = SESSION_CONTEXTS.get(request.session_id)
+    if not session_data:
         raise HTTPException(status_code=404, detail="Session not found. Run a trace first.")
-    if not context.get("summary"):
+    if not session_data.get("summary"):
         raise HTTPException(status_code=400, detail="Summary not ready yet. Please wait for the trace to finish.")
 
-    history: List[Dict[str, str]] = context.setdefault("history", [])
-    history.append({"role": "user", "content": request.message})
-    reply = _generate_chat_reply(context["summary"], history, request.message)
-    history.append({"role": "assistant", "content": reply})
+    # Update history with user's question
+    session_data.setdefault("history", []).append({"role": "user", "content": request.question})
+    
+    # Generate reply
+    reply = _generate_chat_reply(session_data["summary"], session_data["history"], request.question, request.model)
+    
+    # Update history with assistant's reply
+    session_data["history"].append({"role": "assistant", "content": reply})
     return {"reply": reply}
 
 @api.get("/session/{session_id}/graph")

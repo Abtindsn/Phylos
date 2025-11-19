@@ -25,11 +25,16 @@ import re
 # --- API and Model Configuration ---
 load_dotenv()
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+if GEMINI_API_KEY:
+    # Sanitize the key in case it was loaded with quotes or whitespace
+    GEMINI_API_KEY = GEMINI_API_KEY.strip().strip('"').strip("'")
+
+ECO_MODE = os.getenv("PHYLOS_ECO_MODE", "true").lower() in {"1", "true", "yes", "on"}
 OFFLINE_MODE = os.getenv("PHYLOS_OFFLINE_MODE", os.getenv("PHYLOS_OFFLINE", "auto")).lower()
 FORCE_OFFLINE = OFFLINE_MODE in {"1", "true", "yes", "on", "offline", "stub"}
 REQUEST_TIMEOUT = float(os.getenv("PHYLOS_GEMINI_TIMEOUT", "8"))
 HOST_VISIT_LIMIT = int(os.getenv("PHYLOS_MAX_VISITS_PER_HOST", "8"))
-ORIGIN_INSIGHT_MODEL_NAME = os.getenv("PHYLOS_ORIGIN_INSIGHT_MODEL", "gemini-3-pro-preview")
+ORIGIN_INSIGHT_MODEL_NAME = os.getenv("PHYLOS_ORIGIN_INSIGHT_MODEL", "gemini-2.0-flash-exp")
 HTTP_HEADERS = {
     "User-Agent": os.getenv(
         "PHYLOS_HTTP_USER_AGENT",
@@ -80,7 +85,7 @@ USE_GEMINI = bool(GEMINI_API_KEY) and not FORCE_OFFLINE
 
 if USE_GEMINI:
     genai.configure(api_key=GEMINI_API_KEY)
-    llm = genai.GenerativeModel('gemini-3-pro-preview')
+    llm = genai.GenerativeModel('gemini-1.5-flash')
     try:
         origin_llm = genai.GenerativeModel(ORIGIN_INSIGHT_MODEL_NAME)
     except Exception:
@@ -93,7 +98,7 @@ else:
 
 embedding_model = "models/embedding-001"
 GRAPH_RECURSION_LIMIT = int(os.getenv("PHYLOS_RECURSION_LIMIT", "500"))
-_executor = ThreadPoolExecutor(max_workers=2)
+_executor = ThreadPoolExecutor(max_workers=1)
 _gemini_embeddings_available = USE_GEMINI
 _gemini_text_available = USE_GEMINI
 _gemini_origin_available = USE_GEMINI
@@ -164,12 +169,18 @@ def _stub_summary(parent: str, child: str) -> str:
 def embedder(text: str) -> List[float]:
     """Generates embeddings using the Gemini API."""
     global _gemini_embeddings_available
-    if not _gemini_embeddings_available:
+    if ECO_MODE or not _gemini_embeddings_available:
         return _stub_embedding(text)
 
     logger.debug("Embedding content (first 50 chars): '%s...'", text[:50])
+    
+    # Optimization: Truncate text to save tokens and avoid large payloads
+    truncated_text = text[:2000]
+    
     def _call():
-        return genai.embed_content(model=embedding_model, content=text, task_type="RETRIEVAL_DOCUMENT")
+        import time
+        time.sleep(1.0) # Throttle requests to avoid rate limits
+        return genai.embed_content(model=embedding_model, content=truncated_text, task_type="RETRIEVAL_DOCUMENT")
 
     try:
         embedding = _executor.submit(_call).result(timeout=REQUEST_TIMEOUT)
@@ -378,6 +389,30 @@ def extract_links(content: str, base_url: str) -> List[str]:
     ordered = off_domain + on_domain
     return ordered[:4]
 
+def _tokenize(text: str) -> set[str]:
+    """Simple tokenizer that removes common stopwords."""
+    if not text:
+        return set()
+    # Basic English stopwords
+    STOPWORDS = {
+        "the", "be", "to", "of", "and", "a", "in", "that", "have", "i", "it", "for", "not", "on", "with", "he", "as", "you",
+        "do", "at", "this", "but", "his", "by", "from", "they", "we", "say", "her", "she", "or", "an", "will", "my", "one",
+        "all", "would", "there", "their", "what", "so", "up", "out", "if", "about", "who", "get", "which", "go", "me",
+    }
+    words = re.findall(r'\b\w\w+\b', text.lower())
+    return {w for w in words if w not in STOPWORDS}
+
+def _jaccard_drift(text1: str, text2: str) -> float:
+    """Calculates drift (1 - Jaccard Similarity) between two texts."""
+    tokens1 = _tokenize(text1)
+    tokens2 = _tokenize(text2)
+    if not tokens1 or not tokens2:
+        return 1.0 # Max drift if one is empty
+    intersection = len(tokens1 & tokens2)
+    union = len(tokens1 | tokens2)
+    similarity = intersection / union if union else 0.0
+    return 1.0 - similarity
+
 def calculate_semantic_drift(vec1: List[float], vec2: List[float]) -> float:
     """Calculates cosine similarity between two vectors."""
     import numpy as np
@@ -394,6 +429,9 @@ def calculate_semantic_drift(vec1: List[float], vec2: List[float]) -> float:
 def summarize_mutation(parent_content: str, child_content: str) -> str:
     """Uses the LLM to generate a summary of the semantic difference."""
     fallback = _stub_summary(parent_content, child_content)
+    if ECO_MODE:
+        return fallback
+
     prompt = f"""
     Analyze the semantic difference between the two following texts.
     PARENT TEXT:
@@ -412,22 +450,29 @@ def summarize_mutation(parent_content: str, child_content: str) -> str:
 
     return generate_text_response(prompt, fallback)
 
-def generate_text_response(prompt: str, fallback: str) -> str:
+def generate_text_response(prompt: str, fallback: str, model_name: str = None) -> str:
     """
-    TEMP DEBUG: Instrumented helper so we can confirm this path is actually invoked.
+    Generates a text response using the configured Gemini model.
+    Allows overriding the default model via model_name.
     """
-    logger.info(
-        "generate_text_response CALLED (prompt_len=%s, fallback_len=%s)",
-        len(prompt or ""),
-        len(fallback or ""),
-    )
-    debug_marker = "[GEMINI-STUB]"
-    return f"{debug_marker} {fallback}"
+    if not USE_GEMINI:
+        return fallback
+
+    try:
+        # Use the requested model if provided, otherwise use the default llm
+        active_model = genai.GenerativeModel(model_name) if model_name else llm
+        response = active_model.generate_content(prompt)
+        if response.text:
+            return response.text
+        return fallback
+    except Exception as e:
+        logger.error("Gemini generation failed: %s", e)
+        return f"AI Error: {str(e)}" if "429" not in str(e) else fallback
 
 def generate_origin_insight(prompt: str, fallback: str) -> str:
     """Uses a higher-context Gemini model for origin-difference analysis."""
     global _gemini_origin_available
-    if origin_llm is None or not _gemini_origin_available:
+    if ECO_MODE or origin_llm is None or not _gemini_origin_available:
         return fallback
 
     def _call():
@@ -513,15 +558,25 @@ def node_sequence(state: "GraphState") -> Dict[str, Any]:
 
     if not parent_id:
         # "Patient Zero" comparison to global context
-        drift_score = calculate_semantic_drift(state["global_context"], current_article["embedding"])
+        if ECO_MODE:
+             # In Eco Mode, we don't have a global context embedding, so we assume 0 drift for the root
+            drift_score = 0.0
+        else:
+            drift_score = calculate_semantic_drift(state["global_context"], current_article["embedding"])
         parent_id = "GLOBAL_CONTEXT"
     else:
         parent_article = knowledge_graph["nodes"].get(parent_id)
         if not parent_article:
             logger.error("Parent article %s not found in knowledge graph.", parent_id)
             return {}
-        drift_score = calculate_semantic_drift(parent_article["embedding"], current_article["embedding"])
-        summary = summarize_mutation(parent_article["content"], current_article["content"])
+        
+        if ECO_MODE:
+             # Use Jaccard Similarity for better semantic approximation
+             drift_score = _jaccard_drift(parent_article["content"], current_article["content"])
+             summary = _stub_summary(parent_article["content"], current_article["content"])
+        else:
+            drift_score = calculate_semantic_drift(parent_article["embedding"], current_article["embedding"])
+            summary = summarize_mutation(parent_article["content"], current_article["content"])
 
     # Define mutation threshold
     MUTATION_THRESHOLD = 0.3 # Adjusted for real embeddings
