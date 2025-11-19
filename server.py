@@ -391,60 +391,87 @@ def _fallback_origin_summary(origin_text: str, node_text: str, article_title: st
     return summary, hidden
 
 def _summarize_origin_difference(origin_text: str, node_text: str, article_title: str | None = None) -> tuple[str, str | None]:
+    """
+    Ask Gemini (via generate_text_response) for a JSON payload describing the
+    public summary + hidden investigation for ORIGINAL vs FOLLOW-UP article.
+    Falls back to our deterministic diff summarizer if anything goes wrong.
+    """
     if not origin_text or not node_text:
         return "", None
+
+    # Deterministic fallback ensures we always have a reasonable baseline
     fallback_summary, fallback_hidden = _fallback_origin_summary(origin_text, node_text, article_title)
-    fallback_payload = json.dumps({
-        "summary": fallback_summary,
-        "investigation": fallback_hidden,
-    })
+    fallback_payload = json.dumps(
+        {
+            "summary": fallback_summary,
+            "investigation": fallback_hidden or "",
+        },
+        ensure_ascii=False,
+    )
+
     prompt = (
         "Primary Objective: You are an elite Signal Investigator performing a forensic, differential analysis "
         "between the ORIGINAL STORY and the FOLLOW-UP ARTICLE shown below. Your task is to isolate verifiable Signal "
         "(facts, causal intent) from Noise (editorial tone, omissions) and reconstruct how and why the narrative evolved.\n\n"
-        "Respond STRICTLY in compact JSON with two string fields only: "
+        "You MUST respond STRICTLY in compact JSON with two string fields only:\n"
         "{\"summary\": \"public-facing insight\", \"investigation\": \"private chain-of-investigation\"}.\n\n"
         "SUMMARY (2-3 sentences) must:\n"
         " • Describe the Core Power (facts shared across both pieces) and highlight the most significant Δ (difference).\n"
         " • State whether the follow-up reinforces, contradicts, or reframes the original, referencing the source host.\n"
+        f" • Explicitly mention the follow-up article id or title: {(article_title or 'Unknown')!r}.\n"
         "INVESTIGATION (3-4 sentences, hidden) must follow the First-Principles playbook:\n"
         " • Evidence Set & Source Profiles (identify URLs + timestamps, biases).\n"
         " • Commonality Grid (Shared facts) and Discrepancy Matrix items labeled Δ_F, Δ_I, Δ_P.\n"
         " • Hypothesis testing: propose at least two motives for the change, then argue which is superior using the evidence.\n"
         " • Explicitly define Signal vs. Noise in your reasoning and reference the original URLs when citing evidence.\n"
-        "The 'investigation' field MUST NOT simply repeat the 'summary'; it must contain step-by-step reasoning.\n"
         "No steps may be skipped.\n\n"
         f"ARTICLE TITLE: {article_title or 'Unknown'}\n"
-        f"ORIGINAL STORY:\n{_strip_references(origin_text)[:3000]}\n\nFOLLOW-UP ARTICLE:\n{_strip_references(node_text)[:3000]}"
+        "ORIGINAL STORY:\n"
+        f"{_strip_references(origin_text)[:3000]}\n\n"
+        "FOLLOW-UP ARTICLE:\n"
+        f"{_strip_references(node_text)[:3000]}"
     )
-    raw = generate_origin_insight(prompt, fallback_payload)
-    # Start from fallbacks; upgrade if Gemini gives us something valid
+
+    try:
+        raw = generate_text_response(prompt, fallback_payload)
+    except Exception as exc:
+        logger.warning("generate_text_response failed for origin insight: %s", exc)
+        return fallback_summary, fallback_hidden
+
     summary = fallback_summary
     hidden = fallback_hidden
 
-    data = _parse_insight_json(raw)
+    try:
+        data = json.loads(raw)
+    except Exception:
+        data = None
+
     if isinstance(data, dict):
-        summary_text = (data.get("summary") or "").strip()
-        inv_text = (
+        summary_candidate = (data.get("summary") or "").strip()
+        investigation_candidate = (
             data.get("investigation")
             or data.get("analysis")
             or data.get("reason")
             or ""
         )
-        inv_text = inv_text.strip()
+        investigation_candidate = investigation_candidate.strip()
 
-        if summary_text:
-            summary = summary_text
-        if inv_text:
-            hidden = inv_text
+        if summary_candidate:
+            summary = summary_candidate
+        if investigation_candidate:
+            hidden = investigation_candidate
+    elif data is not None:
+        text = str(data).strip()
+        if text:
+            summary = text
     else:
-        plain = (raw or "").strip()
-        if plain:
-            summary = plain
+        raw_text = (raw or "").strip()
+        if raw_text:
+            summary = raw_text
 
     if not hidden:
         hidden = fallback_hidden
-    if hidden.strip() == summary.strip():
+    if hidden and summary and hidden.strip() == summary.strip():
         hidden = fallback_hidden
     return summary, hidden
 
@@ -521,6 +548,7 @@ def _build_investigation_entry(origin: dict | None, article: dict | None, rapid:
         "timestamp": article.get("timestamp"),
         "summary": summary,
         "reason": hidden or summary,
+        "investigation": hidden or summary,
         "url": article.get("id"),
     }
     return entry
@@ -549,17 +577,18 @@ def _build_investigation_timeline(nodes: list[dict], session_context: dict) -> l
             timeline.append(entry)
     return sorted(
         [
-            {
-                "id": entry.get("id"),
-                "title": entry.get("title"),
-                "timestamp": entry.get("timestamp"),
-                "summary": entry.get("summary"),
-                "reason": entry.get("reason"),
-                "url": entry.get("url"),
-            }
-            for entry in timeline
-        ],
-        key=lambda item: (item.get("timestamp") or "", item.get("title") or "")
+        {
+            "id": entry.get("id"),
+            "title": entry.get("title"),
+            "timestamp": entry.get("timestamp"),
+            "summary": entry.get("summary"),
+            "reason": entry.get("reason"),
+            "investigation": entry.get("investigation", entry.get("reason")),
+            "url": entry.get("url"),
+        }
+        for entry in timeline
+    ],
+    key=lambda item: (item.get("timestamp") or "", item.get("title") or "")
     )
 
 # --- Local Imports ---
@@ -1489,18 +1518,21 @@ async def websocket_endpoint(websocket: WebSocket):
                 "name": event["name"],
                 "data": sanitized_data,
             })
-            if raw_data and isinstance(raw_data, dict):
-                article = raw_data.get("current_article")
-                investigation_entry = _maybe_record_investigation(session_context, article, rapid=True)
-                if investigation_entry and not investigation_entry.get("_sent"):
-                    sanitized_entry = {
-                        "id": investigation_entry.get("id"),
-                        "title": investigation_entry.get("title"),
-                        "timestamp": investigation_entry.get("timestamp"),
-                        "summary": _sanitize_payload(investigation_entry.get("summary")),
-                        "reason": _sanitize_payload(investigation_entry.get("reason")),
-                        "url": investigation_entry.get("url"),
-                    }
+                if raw_data and isinstance(raw_data, dict):
+                    article = raw_data.get("current_article")
+                    investigation_entry = _maybe_record_investigation(session_context, article, rapid=True)
+                    if investigation_entry and not investigation_entry.get("_sent"):
+                        sanitized_entry = {
+                            "id": investigation_entry.get("id"),
+                            "title": investigation_entry.get("title"),
+                            "timestamp": investigation_entry.get("timestamp"),
+                            "summary": _sanitize_payload(investigation_entry.get("summary")),
+                            "reason": _sanitize_payload(investigation_entry.get("reason")),
+                            "investigation": _sanitize_payload(
+                                investigation_entry.get("investigation", investigation_entry.get("reason"))
+                            ),
+                            "url": investigation_entry.get("url"),
+                        }
                     await websocket.send_json({
                         "status": "investigation",
                         "entry": sanitized_entry,
@@ -1598,6 +1630,7 @@ async def _upgrade_investigation_entry(
         "timestamp": entry.get("timestamp"),
         "summary": _sanitize_payload(entry.get("summary")),
         "reason": _sanitize_payload(entry.get("reason")),
+        "investigation": _sanitize_payload(entry.get("investigation", entry.get("reason"))),
         "url": entry.get("url"),
     }
     try:
