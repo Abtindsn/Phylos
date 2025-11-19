@@ -412,36 +412,40 @@ def _summarize_origin_difference(origin_text: str, node_text: str, article_title
         " • Commonality Grid (Shared facts) and Discrepancy Matrix items labeled Δ_F, Δ_I, Δ_P.\n"
         " • Hypothesis testing: propose at least two motives for the change, then argue which is superior using the evidence.\n"
         " • Explicitly define Signal vs. Noise in your reasoning and reference the original URLs when citing evidence.\n"
+        "The 'investigation' field MUST NOT simply repeat the 'summary'; it must contain step-by-step reasoning.\n"
         "No steps may be skipped.\n\n"
         f"ARTICLE TITLE: {article_title or 'Unknown'}\n"
         f"ORIGINAL STORY:\n{_strip_references(origin_text)[:3000]}\n\nFOLLOW-UP ARTICLE:\n{_strip_references(node_text)[:3000]}"
     )
     raw = generate_origin_insight(prompt, fallback_payload)
+    # Start from fallbacks; upgrade if Gemini gives us something valid
     summary = fallback_summary
     hidden = fallback_hidden
 
     data = _parse_insight_json(raw)
     if isinstance(data, dict):
         summary_text = (data.get("summary") or "").strip()
-        investigation_text = (
+        inv_text = (
             data.get("investigation")
             or data.get("analysis")
             or data.get("reason")
             or ""
-        ).strip()
+        )
+        inv_text = inv_text.strip()
 
         if summary_text:
             summary = summary_text
-        if investigation_text:
-            hidden = investigation_text
-        else:
-            hidden = fallback_hidden
+        if inv_text:
+            hidden = inv_text
     else:
-        raw_text = (raw or "").strip()
-        if raw_text:
-            summary = raw_text
-            hidden = fallback_hidden
+        plain = (raw or "").strip()
+        if plain:
+            summary = plain
 
+    if not hidden:
+        hidden = fallback_hidden
+    if hidden.strip() == summary.strip():
+        hidden = fallback_hidden
     return summary, hidden
 
 def _build_node_snapshots(
