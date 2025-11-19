@@ -423,7 +423,12 @@ def generate_text_response(prompt: str, fallback: str) -> str:
 
     try:
         response = _executor.submit(_call).result(timeout=REQUEST_TIMEOUT)
-        return response.text
+        text = (response.text or "").strip()
+        if not text:
+            logger.warning("LLM text generation returned empty output. Using fallback.")
+            return fallback
+        logger.debug("LLM text generation succeeded (truncated): %s", text[:200])
+        return text
     except (TimeoutError, Exception) as e:
         logger.warning("LLM text generation failed (%s). Falling back to stub.", e)
         _gemini_text_available = False

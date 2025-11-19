@@ -434,6 +434,7 @@ def _summarize_origin_difference(origin_text: str, node_text: str, article_title
 
     try:
         raw = generate_text_response(prompt, fallback_payload)
+        logger.debug("Origin insight raw (truncated): %s", _shorten(str(raw), 400))
     except Exception as exc:
         logger.warning("generate_text_response failed for origin insight: %s", exc)
         return fallback_summary, fallback_hidden
@@ -441,10 +442,7 @@ def _summarize_origin_difference(origin_text: str, node_text: str, article_title
     summary = fallback_summary
     hidden = fallback_hidden
 
-    try:
-        data = json.loads(raw)
-    except Exception:
-        data = None
+    data = _parse_insight_json(str(raw))
 
     if isinstance(data, dict):
         summary_candidate = (data.get("summary") or "").strip()
