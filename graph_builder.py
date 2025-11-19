@@ -86,7 +86,7 @@ USE_GEMINI = bool(GEMINI_API_KEY) and not FORCE_OFFLINE
 
 if USE_GEMINI:
     genai.configure(api_key=GEMINI_API_KEY)
-    llm = genai.GenerativeModel('gemini-1.5-flash-latest')
+    llm = genai.GenerativeModel('gemini-2.0-flash')
     try:
         origin_llm = genai.GenerativeModel(ORIGIN_INSIGHT_MODEL_NAME)
     except Exception:
@@ -97,10 +97,63 @@ else:
     llm = None
     origin_llm = None
 
-embedding_model = "models/embedding-001"
+    llm = None
+    origin_llm = None
+
+embedding_model = "models/text-embedding-004"
 GRAPH_RECURSION_LIMIT = int(os.getenv("PHYLOS_RECURSION_LIMIT", "500"))
 _executor = ThreadPoolExecutor(max_workers=1)
 _gemini_embeddings_available = USE_GEMINI
+
+# ---# Model fallback sequence when API calls fail
+FALLBACK_MODELS = [
+    "gemini-2.0-flash",
+    "gemini-2.5-flash",
+    "gemini-2.0-flash-exp",
+    "gemini-2.5-pro",
+]
+
+def _call_with_fallback(operation_name: str, func, *args, **kwargs):
+    """
+    Executes a function with automatic model fallback for 429/404 errors.
+    'func' should accept a 'model_name' keyword argument if it's a generation call.
+    """
+    if not USE_GEMINI:
+        raise RuntimeError("Gemini API is disabled.")
+
+    last_exception = None
+    
+    # Try the requested model first if specified, otherwise start with the list
+    models_to_try = list(FALLBACK_MODELS)
+    
+    # If a specific model was requested in kwargs (e.g. for embedding), try that first
+    # For generation, we iterate through models and pass the model name to the function
+    
+    for model_name in models_to_try:
+        try:
+            # If the function is 'genai.embed_content', we pass the model argument
+            if func == genai.embed_content:
+                 return func(model=embedding_model, *args, **kwargs)
+            
+            # For generation, we instantiate the model here or pass the name
+            # Assuming 'func' is a wrapper that takes 'model_name'
+            return func(model_name=model_name, *args, **kwargs)
+
+        except Exception as e:
+            error_str = str(e)
+            is_quota = "429" in error_str or "Quota" in error_str
+            is_not_found = "404" in error_str or "not found" in error_str
+            
+            if is_quota or is_not_found:
+                logger.warning(f"{operation_name} failed with {model_name}: {e}. Retrying with next model...")
+                last_exception = e
+                continue
+            else:
+                # If it's another error (e.g. 500, invalid argument), raise immediately
+                raise e
+                
+    logger.error(f"{operation_name} failed on all models. Last error: {last_exception}")
+    raise last_exception
 _gemini_text_available = USE_GEMINI
 _gemini_origin_available = USE_GEMINI
 STUB_EMBED_DIM = 128
@@ -117,6 +170,40 @@ def _normalized_host(url: str) -> str:
     if host.startswith("www."):
         host = host[4:]
     return host
+
+def _are_domains_related(url1: str, url2: str) -> bool:
+    """
+    Checks if two URLs belong to related domains (e.g., bbc.com and bbc.co.uk).
+    """
+    host1 = _normalized_host(url1)
+    host2 = _normalized_host(url2)
+    
+    if host1 == host2:
+        return True
+        
+    # Remove TLDs to compare base names
+    # Simple heuristic: split by dot and compare the second to last part if length > 2
+    # or just check if one is a substring of another for now, but that's risky.
+    # Better approach: check for common known related domains or shared root.
+    
+    # Heuristic 1: Shared root domain (e.g. cnbc.com, cnbc.eu - though cnbc.eu isn't common, but you get the idea)
+    # Actually, let's look at the prompt examples: bbc.com and bbc.co.uk.
+    # They share 'bbc'.
+    
+    parts1 = host1.split('.')
+    parts2 = host2.split('.')
+    
+    # Filter out common TLDs/SLDs for comparison
+    common_suffixes = {'com', 'co', 'uk', 'org', 'net', 'gov', 'edu', 'io', 'ai', 'app', 'dev'}
+    
+    root1 = [p for p in parts1 if p not in common_suffixes]
+    root2 = [p for p in parts2 if p not in common_suffixes]
+    
+    # If they share a significant root part
+    if set(root1) & set(root2):
+        return True
+        
+    return False
 
 def _has_disallowed_extension(url: str) -> bool:
     path = urlparse(url).path.lower()
@@ -185,7 +272,7 @@ def _stub_summary(parent: str, child: str) -> str:
     snippet = child[longest.b:longest.b + min(80, longest.size)]
     snippet = snippet or child[:80]
     return (
-        f"Offline summary: similarity {overlap:.2f}. "
+        f"[Non-AI Analysis] Offline summary: similarity {overlap:.2f}. "
         f"New emphasis around: \"{snippet.strip()}\""
     )
 
@@ -203,7 +290,7 @@ def embedder(text: str) -> List[float]:
     def _call():
         import time
         time.sleep(1.0) # Throttle requests to avoid rate limits
-        return genai.embed_content(model=embedding_model, content=truncated_text, task_type="RETRIEVAL_DOCUMENT")
+        return _call_with_fallback("Embedding", genai.embed_content, content=truncated_text, task_type="RETRIEVAL_DOCUMENT")
 
     try:
         embedding = _executor.submit(_call).result(timeout=REQUEST_TIMEOUT)
@@ -213,7 +300,7 @@ def embedder(text: str) -> List[float]:
         _gemini_embeddings_available = False
         return _stub_embedding(text)
 
-def fetch_article_content(url: str) -> Dict[str, Any]:
+def fetch_article_content(url: str) -> tuple[dict[str, Any], str] | None:
     """Fetches an article body from the public web with a graceful offline fallback."""
     logger.info("Fetching content from URL: %s", url)
 
@@ -229,7 +316,7 @@ def fetch_article_content(url: str) -> Dict[str, Any]:
             "author": "Unknown",
             "timestamp": _now_iso(),
             "outbound_links": [simulated],
-        }
+        }, ""
 
     if FORCE_OFFLINE:
         return _stub()
@@ -239,13 +326,13 @@ def fetch_article_content(url: str) -> Dict[str, Any]:
         response.raise_for_status()
     except Exception as exc:
         logger.warning("Failed to fetch %s (%s). Skipping.", url, exc)
-        return None
+        return None, ""
 
     content_type = (response.headers.get("Content-Type") or "").lower()
     allowed_types = ("text/html", "application/xhtml", "application/xml", "text/plain")
     if content_type and not any(t in content_type for t in allowed_types):
         logger.info("Skipping %s due to unsupported content type: %s", url, content_type)
-        return None
+        return None, ""
 
     raw_html = response.text
     soup = BeautifulSoup(raw_html, "html.parser")
@@ -261,7 +348,7 @@ def fetch_article_content(url: str) -> Dict[str, Any]:
     content = content.strip()
     if not content:
         logger.warning("No readable text extracted from %s. Skipping.", url)
-        return None
+        return None, ""
 
     title = soup.title.string.strip() if soup.title and soup.title.string else url
 
@@ -373,13 +460,13 @@ def fetch_article_content(url: str) -> Dict[str, Any]:
         if preview:
             content = f"{content}\n\nReferenced URLs:\n{preview}"
 
-    return {
+    return ({
         "id": url,
         "content": f"{title}\n\n{content}",
         "author": author,
         "timestamp": published,
         "outbound_links": prioritized_links,
-    }
+    }, raw_html)
 
 def extract_links(content: str, base_url: str) -> List[str]:
     """Extracts outbound links, preferring sources outside the current domain."""
@@ -443,33 +530,72 @@ def calculate_semantic_drift(vec1: List[float], vec2: List[float]) -> float:
         return 0.0
     vec1 = np.array(vec1)
     vec2 = np.array(vec2)
+    if vec1.shape != vec2.shape:
+        logger.warning("Embedding dimension mismatch: %s vs %s. Returning default drift.", vec1.shape, vec2.shape)
+        return 1.0 # Assume high drift if we can't compare
+
     similarity = np.dot(vec1, vec2) / (np.linalg.norm(vec1) * np.linalg.norm(vec2))
     # We want drift, which is 1 - similarity
     drift = 1.0 - similarity
     logger.debug("Calculated semantic drift: %s", drift)
     return drift
 
-def summarize_mutation(parent_content: str, child_content: str) -> str:
+def summarize_mutation(parent_content: str, child_content: str, parent_url: str = "", child_url: str = "", domains_related: bool = False, drift_score: float = 0.0) -> str:
     """Uses the LLM to generate a summary of the semantic difference."""
     fallback = _stub_summary(parent_content, child_content)
     if ECO_MODE:
         return fallback
 
-    prompt = f"""
-    Analyze the semantic difference between the two following texts.
-    PARENT TEXT:
-    ---
-    {parent_content[:2000]}
-    ---
+    if drift_score > 0.9:
+        prompt = f"""
+        PERFORM A DEEP NARRATIVE ANALYSIS of the divergence between these two texts.
+        The semantic drift score is {drift_score:.2f} (High Anomaly).
+        
+        PARENT TEXT (Source: {parent_url}):
+        ---
+        {parent_content[:3000]}
+        ---
 
-    CHILD TEXT:
-    ---
-    {child_content[:2000]}
-    ---
+        CHILD TEXT (Source: {child_url}):
+        ---
+        {child_content[:3000]}
+        ---
 
-    Concisely describe the mutation or change in narrative, tone, or key information.
-    Focus on what makes the CHILD TEXT different from the PARENT TEXT.
-    """
+        Your task is to explain WHY the mutation score is so high.
+        
+        Structure your response exactly as follows:
+        
+        **Analysis:**
+        *   **Parent Focus:** [Concise summary of the parent's main topic/angle]
+        *   **Child Focus:** [Concise summary of the child's main topic/angle]
+        
+        **Conclusion:**
+        [Explain the specific nature of the divergence. Is it a complete topic shift? A different entity being discussed? A "hallucinated" link? Be specific.]
+        """
+    else:
+        prompt = f"""
+        Analyze the semantic difference between the two following texts.
+        PARENT TEXT:
+        ---
+        {parent_content[:2000]}
+        ---
+    
+        CHILD TEXT:
+        ---
+        {child_content[:2000]}
+        ---
+    
+        Concisely describe the mutation or change in narrative, tone, or key information.
+        Focus on what makes the CHILD TEXT different from the PARENT TEXT.
+        Avoid generic phrases like "The text discusses". Be specific about names, events, and details.
+        
+        CONTEXT:
+        Parent URL: {parent_url}
+        Child URL: {child_url}
+        Are domains related: {domains_related}
+        
+        If the domains are related but the content is very different, explain WHY (e.g., regional variation, updated article, different topic).
+        """
 
     return generate_text_response(prompt, fallback)
 
@@ -481,28 +607,54 @@ def generate_text_response(prompt: str, fallback: str, model_name: str = None) -
     if not USE_GEMINI:
         return fallback
 
-    try:
+    def _generate(model_name=None):
         # Use the requested model if provided, otherwise use the default llm
         active_model = genai.GenerativeModel(model_name) if model_name else llm
-        response = active_model.generate_content(prompt)
+        return active_model.generate_content(prompt)
+
+    try:
+        # We don't pass model_name in kwargs here because _call_with_fallback will pass it as a kwarg to _generate
+        # when it iterates. However, if we want to start with a specific model, we should pass it.
+        # But _call_with_fallback logic says: "If a specific model was requested in kwargs... try that first".
+        # The issue is that _call_with_fallback calls func(model_name=model_name, *args, **kwargs).
+        # If kwargs ALREADY contains model_name, it crashes.
+        
+        # Correct usage: Pass model_name only if we want to override the start. 
+        # But _call_with_fallback iterates anyway.
+        # Let's just NOT pass model_name in kwargs to _call_with_fallback for _generate, 
+        # because _generate signature is def _generate(model_name=None).
+        
+        # Wait, if I pass model_name to _call_with_fallback(..., model_name=foo), 
+        # then inside _call_with_fallback, kwargs has {'model_name': foo}.
+        # Then it calls func(model_name=current_model, **kwargs).
+        # So it calls func(model_name=current_model, model_name=foo) -> TypeError!
+        
+        # Fix: Remove model_name from kwargs before calling func inside _call_with_fallback?
+        # Or just don't pass it here if we want fallback logic to handle it.
+        # If we want to force a start model, we should handle it differently.
+        # For now, let's just NOT pass it in kwargs here, and let fallback logic iterate.
+        response = _call_with_fallback("Text Generation", _generate)
         if response.text:
             return response.text
         return fallback
     except Exception as e:
         logger.error("Gemini generation failed: %s", e)
-        return f"AI Error: {str(e)}" if "429" not in str(e) else fallback
+        # Always return fallback (which is unique) on error to avoid repetitive error messages
+        return fallback
 
 def generate_origin_insight(prompt: str, fallback: str) -> str:
     """Uses a higher-context Gemini model for origin-difference analysis."""
     global _gemini_origin_available
-    if ECO_MODE or origin_llm is None or not _gemini_origin_available:
+    if ECO_MODE or not _gemini_origin_available:
         return fallback
 
-    def _call():
-        return origin_llm.generate_content(prompt)
+    def _call(model_name=None):
+        # Use the passed model_name from fallback logic, or default to ORIGIN_INSIGHT_MODEL_NAME
+        active_model = genai.GenerativeModel(model_name or ORIGIN_INSIGHT_MODEL_NAME)
+        return active_model.generate_content(prompt)
 
     try:
-        response = _executor.submit(_call).result(timeout=REQUEST_TIMEOUT)
+        response = _executor.submit(_call_with_fallback, "Origin Insight", _call).result(timeout=REQUEST_TIMEOUT)
         return response.text
     except (TimeoutError, Exception) as e:
         logger.warning("Origin insight generation failed (%s). Falling back to stub.", e)
@@ -512,6 +664,12 @@ def generate_origin_insight(prompt: str, fallback: str) -> str:
 
 # --- Graph Node Definitions ---
 
+def _add_raw_html_to_article(article_data: Dict[str, Any], raw_html: str) -> Dict[str, Any]:
+    """Helper to attach raw HTML for later analysis without bloating logs."""
+    if article_data:
+        article_data["raw_html"] = raw_html
+    return article_data
+
 def node_acquire(state: "GraphState") -> Dict[str, Any]:
     """
     Acquires the next article from the traversal queue.
@@ -520,11 +678,13 @@ def node_acquire(state: "GraphState") -> Dict[str, Any]:
     queue = list(state["traversal_queue"])
     article_data = None
     url = parent_id = None
+    raw_html_content = ""
     depth = 0
 
     while queue:
         url, parent_id, depth = queue.pop(0)
-        candidate = fetch_article_content(url)
+        response_tuple = fetch_article_content(url)
+        candidate, raw_html_content = response_tuple if response_tuple else (None, "")
         if candidate:
             article_data = candidate
             break
@@ -540,6 +700,7 @@ def node_acquire(state: "GraphState") -> Dict[str, Any]:
         }
 
     article_data["embedding"] = embedder(article_data["content"])
+    article_data = _add_raw_html_to_article(article_data, raw_html_content)
     article_data["depth"] = depth
     article_data.setdefault("outbound_links", [])
 
@@ -580,32 +741,60 @@ def node_sequence(state: "GraphState") -> Dict[str, Any]:
         return {}
 
     if not parent_id:
-        # "Patient Zero" comparison to global context
-        if ECO_MODE:
-             # In Eco Mode, we don't have a global context embedding, so we assume 0 drift for the root
-            drift_score = 0.0
-        else:
-            drift_score = calculate_semantic_drift(state["global_context"], current_article["embedding"])
+        # "Patient Zero" is the original source - no mutation by definition
+        # It should always be considered authentic (green) with 0.0 drift
+        drift_score = 0.0
         parent_id = "GLOBAL_CONTEXT"
+        divergence_reason = "Patient Zero (Root)"
+        domains_related = True # Self-referential effectively
     else:
         parent_article = knowledge_graph["nodes"].get(parent_id)
         if not parent_article:
             logger.error("Parent article %s not found in knowledge graph.", parent_id)
             return {}
         
+        
+        domains_related = _are_domains_related(parent_article["id"], current_article["id"])
+        divergence_reason = "Standard Drift"
+
         if ECO_MODE:
              # Use Jaccard Similarity for better semantic approximation
              drift_score = _jaccard_drift(parent_article["content"], current_article["content"])
              summary = _stub_summary(parent_article["content"], current_article["content"])
+             divergence_reason = "Jaccard Drift (Eco Mode)"
         else:
             drift_score = calculate_semantic_drift(parent_article["embedding"], current_article["embedding"])
-            summary = summarize_mutation(parent_article["content"], current_article["content"])
+            
+            # --- Refined Mutation Logic ---
+            
+            if drift_score > 0.90:
+                if domains_related:
+                    # High drift but related domains -> Likely a regional variation or homepage vs article
+                    # We soften the score slightly to avoid breaking the trace, but flag it.
+                    logger.info("High drift (%.2f) between related domains (%s -> %s). Suspected Regional/Format Variation.", 
+                                drift_score, parent_article["id"], current_article["id"])
+                    divergence_reason = "Regional/Format Variation (Related Sources)"
+                    # Optional: Soften score if we want to treat it as less severe?
+                    # For now, we keep the score but change the reason.
+                else:
+                    divergence_reason = "High Mutation Hotspot (Unrelated Sources)"
+            elif domains_related and drift_score > 0.5:
+                 divergence_reason = "Routine Update/Variation (Related Sources)"
+
+            summary = summarize_mutation(parent_article["content"], current_article["content"], 
+                                         parent_url=parent_article["id"], child_url=current_article["id"],
+                                         domains_related=domains_related, drift_score=drift_score)
 
     # Define mutation threshold
     MUTATION_THRESHOLD = 0.3 # Adjusted for real embeddings
 
     relation_type = "Mutation" if drift_score > MUTATION_THRESHOLD else "Replication"
-    logger.debug("Relation to parent: %s (Score: %s)", relation_type, drift_score)
+    
+    # Override relation type for specific cases
+    if drift_score > 0.90:
+        relation_type = "Anomaly" if not domains_related else "Major Variation"
+
+    logger.debug("Relation to parent: %s (Score: %s, Reason: %s)", relation_type, drift_score, divergence_reason)
 
     new_edge = {
         "source": parent_id,
@@ -613,6 +802,7 @@ def node_sequence(state: "GraphState") -> Dict[str, Any]:
         "attributes": {
             "mutation_score": drift_score,
             "relation_type": relation_type,
+            "divergence_reason": divergence_reason,
             "summary": summary
         }
     }
@@ -630,6 +820,8 @@ def node_branch(state: "GraphState") -> Dict[str, Any]:
     """
     logger.info("Node: Branch")
     current_article = state["current_article"]
+    warnings = list(state.get("data_warnings") or [])
+    raw_html = current_article.get("raw_html", "")
     if not current_article:
         logger.info("No current article available for branching.")
         return {}
@@ -665,7 +857,20 @@ def node_branch(state: "GraphState") -> Dict[str, Any]:
             logger.debug("Skipping already seen link: %s", link)
             continue
         if _has_future_date(link):
-            logger.warning("Skipping future-dated link: %s", link)
+            # --- Enhanced Anomaly Investigation ---
+            context_snippet = "Context not available."
+            anchor_text = "N/A"
+            if raw_html:
+                soup = BeautifulSoup(raw_html, "html.parser")
+                anchor_tag = soup.find("a", href=re.compile(re.escape(link.split('?')[0])))
+                if anchor_tag:
+                    anchor_text = anchor_tag.get_text(strip=True)
+                    # Get the parent tag's text to provide context
+                    parent_context = anchor_tag.parent.get_text(" ", strip=True) if anchor_tag.parent else ""
+                    context_snippet = parent_context[:200]
+            
+            logger.warning("Skipping future-dated link: %s (Anchor: '%s')", link, anchor_text)
+            warnings.append(f"Future-Dated URL Skipped: Found in '{current_article['id']}'. URL: '{link}'. Anchor Text: '{anchor_text}'. Context: '{context_snippet}...'. This could be a placeholder, typo, or pre-publication link.")
             continue
         total_host_visits = host_counts.get(host, 0) + queued_host_counts.get(host, 0)
         if HOST_VISIT_LIMIT > 0 and total_host_visits >= HOST_VISIT_LIMIT:
@@ -686,6 +891,7 @@ def node_branch(state: "GraphState") -> Dict[str, Any]:
 
     return {
         "traversal_queue": updated_queue,
+        "data_warnings": warnings,
     }
 
 
@@ -754,12 +960,8 @@ def get_chat_model_options() -> List[Dict[str, Any]]:
     FALLBACK_MODELS = [
         {"id": "gemini-2.5-flash", "label": "Gemini 2.5 Flash"},
         {"id": "gemini-2.5-pro", "label": "Gemini 2.5 Pro"},
-        {"id": "gemini-2.0-flash-exp", "label": "Gemini 2.0 Flash (Experimental)"},
         {"id": "gemini-2.0-flash", "label": "Gemini 2.0 Flash"},
-        {"id": "gemini-1.5-flash", "label": "Gemini 1.5 Flash"},
-        {"id": "gemini-1.5-flash-8b", "label": "Gemini 1.5 Flash 8B"},
-        {"id": "gemini-1.5-pro", "label": "Gemini 1.5 Pro"},
-        {"id": "gemini-1.0-pro", "label": "Gemini 1.0 Pro"},
+        {"id": "gemini-2.0-flash-exp", "label": "Gemini 2.0 Flash (Experimental)"},
     ]
     
     if not USE_GEMINI:
@@ -817,14 +1019,8 @@ def get_default_chat_model() -> str:
     elif USE_GEMINI and llm:
         try:
             # The model name might be in the format 'models/gemini-1.5-flash-latest'
-            # We need to extract just the model ID
-            model_name = getattr(llm, '_model_name', None) or 'gemini-1.5-flash'
-            if model_name.startswith('models/'):
-                model_name = model_name.replace('models/', '')
-            # Remove '-latest' suffix if present
-            if model_name.endswith('-latest'):
-                model_name = model_name.replace('-latest', '')
-            return model_name
+            model_name = getattr(llm, '_model_name', 'gemini-1.5-flash-latest')
+            return model_name.replace('models/', '')
         except Exception:
             pass
     

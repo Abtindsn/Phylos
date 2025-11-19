@@ -1,4 +1,4 @@
- """
+"""
 Defines the strict, typed state for the narrative analysis graph and the data models for API communication.
 """
 from typing import TypedDict, List, Dict, Any, Annotated, Tuple
@@ -106,3 +106,6 @@ class GraphState(TypedDict):
 
     # Maximum depth for traversal
     max_depth: int
+
+    # A list of warnings about data integrity issues encountered during the trace.
+    data_warnings: List[str]

@@ -13,6 +13,7 @@ import re
 from urllib.parse import urlparse
 import asyncio
 import uvicorn
+from threading import Lock
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
@@ -193,6 +194,7 @@ class ChatRequest(BaseModel):
 def _create_session() -> tuple[str, Dict[str, Any]]:
     session_id = str(uuid.uuid4())
     SESSION_CONTEXTS[session_id] = {
+        "id": session_id,
         "knowledge_graph": {"nodes": {}, "edges": []},
         "summary": None,
         "history": [],
@@ -213,6 +215,7 @@ def _gather_graphs(obj, acc, depth=0, max_depth=4):
         for item in obj:
             _gather_graphs(item, acc, depth + 1, max_depth)
 
+
 def _accumulate_graph(accumulator: Dict[str, Any], data: Dict[str, Any] | None):
     if not data:
         return
@@ -226,9 +229,45 @@ def _accumulate_graph(accumulator: Dict[str, Any], data: Dict[str, Any] | None):
         if isinstance(edges, list):
             accumulator["edges"].extend(edges)
 
+    warnings = data.get("data_warnings")
+    if isinstance(warnings, list):
+        accumulator.setdefault("data_warnings", []).extend(warnings)
+
+def _advanced_mutation_metrics(edges: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """Calculates advanced metrics from a list of graph edges."""
+    if not edges:
+        return {}
+
+    scores = [edge.get("attributes", {}).get("mutation_score", 0.0) for edge in edges]
+    valid_scores = [s for s in scores if isinstance(s, (int, float))]
+
+    if not valid_scores:
+        return {"average_mutation_score": 0.0}
+
+    # 1. Volatility (Standard Deviation of Scores)
+    # High volatility suggests inconsistent narrative shifts.
+    import numpy as np
+    volatility = np.std(valid_scores)
+
+    # 2. Escape Velocity (Max Score)
+    # The single most significant narrative jump in the trace.
+    escape_velocity = max(valid_scores)
+
+    # 3. Narrative Decay (Average score of the last 5 edges)
+    # Indicates if the story is stabilizing or still mutating at the edges of the trace.
+    last_five_scores = valid_scores[-5:]
+    decay = sum(last_five_scores) / len(last_five_scores) if last_five_scores else 0.0
+
+    return {
+        "volatility": f"{volatility:.3f}",
+        "escape_velocity": f"{escape_velocity:.3f}",
+        "narrative_decay": f"{decay:.3f}",
+    }
+
 def _generate_graph_summary(graph: Dict[str, Any]) -> str:
     node_count = len(graph.get("nodes", {}))
     edge_count = len(graph.get("edges", []))
+    warnings = graph.get("data_warnings", [])
     all_edges = graph.get("edges", [])
 
     # Sort edges by mutation score to find true hotspots
@@ -238,7 +277,7 @@ def _generate_graph_summary(graph: Dict[str, Any]) -> str:
     
     sorted_edges = sorted(all_edges, key=get_score, reverse=True)
 
-data     # De-duplicate hotspots to show unique connections
+    # De-duplicate hotspots to show unique connections
     unique_hotspots = []
     seen_connections = set()
     for edge in sorted_edges:
@@ -265,6 +304,11 @@ data     # De-duplicate hotspots to show unique connections
         except (TypeError, ValueError):
             score_text = "-"
         edge_lines.append(f"{edge['source']} -> {edge['target']} ({rel}, score {score_text})")
+    
+    warnings_text = ""
+    if warnings:
+        warnings_list = "\n".join(f"- {w}" for w in warnings)
+        warnings_text = f"\n\n**Data Integrity Warnings:**\n{warnings_list}"
     edge_snippet = "; ".join(edge_lines) if edge_lines else "No mutation edges captured."
     
     if ECO_MODE:
@@ -296,7 +340,7 @@ data     # De-duplicate hotspots to show unique connections
                 f"- Narrative Connections: {edge_count}\n"
                 f"- Avg Mutation Score: {avg_score:.2f}\n\n"
                 f"**Top Mutation Hotspots:**\n"
-                f"{hotspots or 'None detected.'}\n\n"
+                f"{hotspots or 'None detected.'}{warnings_text}\n\n"
                 f"*Note: This is an automated data report. Ask the chat assistant for deeper analysis.*"
             )
 
@@ -304,17 +348,29 @@ data     # De-duplicate hotspots to show unique connections
         f"The trace captured {node_count} unique sources tied together by {edge_count} narrative relationships. "
         f"Mutation hotspots observed along: {edge_snippet}. Use these as jumping-off points for deeper review."
     )
+    hotspot_list_for_prompt = "\n".join(edge_lines)
     prompt = f"""
-    You are Gemini. Provide a concise but insightful summary of a narrative trace.
-    Node count: {node_count}
-    Edge count: {edge_count}
-    Representative edges (source -> target, relation, score):
-    {json.dumps(sample_edges, indent=2)}
-    Advanced Metrics:
-    {json.dumps(_advanced_mutation_metrics(graph.get('edges', [])), indent=2)}
+    You are Gemini, an elite Signal Investigator. Your task is to provide a concise but insightful summary of a narrative trace.
 
-    Describe overall findings in 2 short paragraphs and highlight potential mutation hotspots.
-    Incorporate the advanced metrics into your analysis.
+    **Trace Vitals:**
+    - Node count: {node_count}
+    - Edge count: {edge_count}
+    - Advanced Metrics: {json.dumps(_advanced_mutation_metrics(graph.get('edges', [])), indent=2)}
+    {warnings_text}
+
+    **Analytical Framework:**
+    Exceptionally high mutation scores (e.g., >0.90) indicate significant narrative divergence. While not a system error, these scores represent a substantial **data integrity challenge**, as the narrative has undergone considerable changes from its origin. Your primary goal is to analyze these alterations and their implications.
+
+    **Primary Objective: Analyze Narrative Divergence**
+    Based on the top mutation hotspots listed below, identify key alterations, potential misinterpretations, or intentional disinformation between the source and its mutated derivatives.
+
+    **Top Mutation Hotspots:**
+    {hotspot_list_for_prompt}
+
+    **Your Analysis (2-3 paragraphs):**
+    1.  Provide a top-level summary of the trace, incorporating the advanced metrics to describe the overall narrative stability (e.g., "The trace shows high volatility, suggesting...").
+    2.  Synthesize your analysis of the hotspots. For the most significant mutation, explain the narrative divergence. What changed? What might be the motive (e.g., reframing for a new audience, error, disinformation)?
+    3.  Conclude with a clear next investigative step for a human analyst.
     """
     return generate_text_response(prompt, fallback)
 
@@ -332,22 +388,35 @@ def _generate_chat_reply(
     graph = session_context.get("knowledge_graph", {})
     node_count = len(graph.get("nodes", {}))
     edge_count = len(graph.get("edges", []))
+    warnings = graph.get("data_warnings", [])
+    warnings_text = ""
+    if warnings:
+        warnings_list = "\n".join(f"- {w}" for w in warnings)
+        warnings_text = f"DATA INTEGRITY WARNINGS:\n{warnings_list}"
     
     history_text = "\n".join(f"{item['role']}: {item['content']}" for item in history[-6:])
     prompt = f"""
-    You are Gemini, an elite Signal Investigator. Your task is to analyze a narrative trace report and answer user questions.
-    You MUST detect and explain data integrity anomalies based on the provided context.
+    You are Gemini, an AI assistant helping analyze a narrative trace investigation.
     
-    SUMMARY:
+    TRACE SUMMARY (for reference):
     {summary}
 
-    CHAT HISTORY:
+    {warnings_text}
+
+    RECENT CONVERSATION:
     {history_text}
 
-    USER QUESTION:
+    USER'S CURRENT QUESTION:
     {question}
 
-    Respond concisely (<=120 words) and suggest next investigative steps when useful.
+    INSTRUCTIONS:
+    - Answer the user's question naturally and directly
+    - Use the trace summary and warnings ONLY when relevant to their question
+    - If they ask about the trace/analysis, reference the summary
+    - If they ask general questions (like "what is your favorite color"), respond naturally without forcing the trace summary into your answer
+    - If they're asking about anomalies or data integrity, prioritize the warnings section
+    - Keep responses concise (<=120 words) and conversational
+    - Don't repeat yourself unnecessarily - if you've already explained something, acknowledge their follow-up naturally
     """
     return generate_text_response(prompt, fallback, model_name=model_name)
 
@@ -446,7 +515,7 @@ def _fallback_origin_summary(origin_text: str, node_text: str, article_title: st
 
     article_label = article_title or "Follow-on article"
     summary = (
-        f"{article_label}: Original focus centered on {origin_focus}... "
+        f"[Non-AI Analysis] {article_label}: Original focus centered on {origin_focus}... "
         f"This piece highlights {changed_focus}... "
         f"Net effect: {delta}"
     )
@@ -663,6 +732,7 @@ from graph_builder import (
 
 # --- Session Storage ---
 SESSION_CONTEXTS: Dict[str, Dict[str, Any]] = {}
+SESSION_LOCKS: Dict[str, Lock] = {}
 
 # --- FastAPI App Initialization ---
 api = FastAPI(
@@ -1435,7 +1505,7 @@ CLASSIC_HTML = """
                     const response = await fetch('/chat', {
                         method: 'POST',
                         headers: {'Content-Type': 'application/json'},
-                        body: JSON.stringify({session_id: currentSessionId, question: message}), // Changed 'message' to 'question'
+                        body: JSON.stringify({session_id: currentSessionId, question: message}),
                     });
                     const data = await response.json();
                     if (!response.ok) {
@@ -1547,6 +1617,7 @@ async def websocket_endpoint(websocket: WebSocket):
     logger.info("WebSocket connection attempt from %s", websocket.client)
     await websocket.accept()
     session_id, session_context = _create_session()
+    SESSION_LOCKS[session_id] = Lock()
     await websocket.send_json({"status": "session", "session_id": session_id})
     try:
         # 1. Receive the initial request from the client
@@ -1558,7 +1629,11 @@ async def websocket_endpoint(websocket: WebSocket):
         logger.debug("Acknowledgement sent to client.")
 
         # 2. Prepare the initial state for the graph
-        patient_zero_content = fetch_article_content(request.start_url)
+        response_tuple = fetch_article_content(request.start_url)
+        if not response_tuple:
+            await websocket.send_json({"status": "error", "message": f"Failed to fetch the starting URL: {request.start_url}"})
+            return
+        patient_zero_content, _ = response_tuple
         global_context_embedding = embedder(patient_zero_content["content"])
         logger.info("Prepared patient zero content for %s", request.start_url)
 
@@ -1572,6 +1647,7 @@ async def websocket_endpoint(websocket: WebSocket):
             "parent_article_id": None,
             "max_depth": request.max_depth,
         }
+        initial_state["data_warnings"] = []
         session_context["origin"] = {
             "url": request.start_url,
             "embedding": global_context_embedding,
@@ -1652,6 +1728,7 @@ async def websocket_endpoint(websocket: WebSocket):
         if websocket.client_state.name != 'DISCONNECTED':
             await websocket.close()
         logger.info("WebSocket connection closed for client %s", websocket.client)
+        SESSION_LOCKS.pop(session_id, None)
 
 # --- Main Execution ---
 if __name__ == "__main__":
@@ -1671,60 +1748,51 @@ def _maybe_record_investigation(
     origin = session_context.get("origin")
     if origin and article_id == origin.get("url"):
         return None
-    investigation_map = session_context.setdefault("investigation_map", {})
-    existing = investigation_map.get(article_id)
-    if existing and not force:
-        if "timestamp" not in existing and article.get("timestamp"):
-            existing["timestamp"] = article.get("timestamp")
-        return existing
 
-    origin = session_context.get("origin")
-    if not origin or article_id == origin.get("url"):
-        return None
+    session_lock = SESSION_LOCKS.get(session_context["id"], Lock())
+    with session_lock:
+        investigation_map = session_context.setdefault("investigation_map", {})
+        existing = investigation_map.get(article_id)
+        if existing and not force:
+            if "timestamp" not in existing and article.get("timestamp"):
+                existing["timestamp"] = article.get("timestamp")
+            return existing
 
-    entry = _build_investigation_entry(origin, article, rapid=rapid)
-    if not entry:
-        return None
+        entry = _build_investigation_entry(origin, article, rapid=rapid)
+        if not entry:
+            return None
 
-    last_summary = session_context.get("last_investigation_summary")
-    if entry["summary"] and entry["summary"] == last_summary:
-        host = _short_host(article_id)
-        entry["summary"] = f"{entry['summary']} (Source: {host or article_id})"
-    session_context["last_investigation_summary"] = entry["summary"]
+        last_summary = session_context.get("last_investigation_summary")
+        if entry["summary"] and entry["summary"] == last_summary:
+            host = _short_host(article_id)
+            entry["summary"] = f"{entry['summary']} (Source: {host or article_id})"
+        session_context["last_investigation_summary"] = entry["summary"]
 
-    if existing:
-        existing.update(entry)
-        entry = existing
-    else:
-        investigation_map[article_id] = entry
-        session_context.setdefault("investigation", []).append(entry)
-    return entry
+        if existing:
+            existing.update(entry)
+            entry = existing
+        else:
+            investigation_map[article_id] = entry
+            session_context.setdefault("investigation", []).append(entry)
+        return entry
 
-async def _upgrade_investigation_entry(
-    session_context: Dict[str, Any],
-    article: Dict[str, Any],
-    websocket: WebSocket
-) -> None:
+async def _upgrade_investigation_entry(session_context: Dict[str, Any], article: Dict[str, Any], websocket: WebSocket) -> None:
     loop = asyncio.get_running_loop()
     entry = await loop.run_in_executor(
         None,
         lambda: _maybe_record_investigation(session_context, article, rapid=False, force=True)
     )
-    if not entry:
-        return
-    sanitized_entry = {
-        "id": entry.get("id"),
-        "title": entry.get("title"),
-        "timestamp": entry.get("timestamp"),
-        "summary": _sanitize_payload(entry.get("summary")),
-        "reason": _sanitize_payload(entry.get("reason")),
-        "investigation": _sanitize_payload(entry.get("investigation", entry.get("reason"))),
-        "url": entry.get("url"),
-    }
-    try:
+    if entry:
+        sanitized_entry = {
+            "id": entry.get("id"),
+            "title": entry.get("title"),
+            "timestamp": entry.get("timestamp"),
+            "summary": _sanitize_payload(entry.get("summary")),
+            "reason": _sanitize_payload(entry.get("reason")),
+            "investigation": _sanitize_payload(entry.get("investigation", entry.get("reason"))),
+            "url": entry.get("url"),
+        }
         await websocket.send_json({
             "status": "investigation_update",
             "entry": sanitized_entry,
         })
-    except Exception as exc:
-        logger.debug("Failed to push investigation update: %s", exc)
