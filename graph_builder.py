@@ -76,10 +76,17 @@ SOCIAL_SHARE_KEYWORDS = {"share", "sharer", "intent", "compose", "bookmark", "lo
 URL_PATH_BLOCKLIST = {
     "/store", "/shop", "/cart", "/checkout", "/product", "/collection",
     "/help", "/support", "/faq", "/contact",
-    "/login", "/signin", "/signup", "/register", "/account", "/auth",
-    "/privacy", "/terms", "/legal", "/policy", "/cookie", "/gdpr",
+    "/login", "/signin", "/signup", "/register", "/account", "/auth", "/servicelogin",
+    "/privacy", "/terms", "/legal", "/policy", "/cookie", "/gdpr", "/consent",
     "/search", "/subscribe", "/membership", "/donate", "/subscription",
-    "/ads", "/advertising", "/sitemap", "/feed", "/rss"
+    "/ads", "/advertising", "/sitemap", "/feed", "/rss",
+    "/in/",  # LinkedIn profiles
+    "/company/",  # LinkedIn company pages
+    "/showcase", "/pro", "/learn", "/about", "/open-source",  # Marketing pages
+    "/lp/",  # Landing pages
+    "/plans",  # Pricing pages
+    "/get-started", "/quickstarts",  # Getting started guides (not news)
+    "/solutions", "/products", "/services",  # Product marketing
 }
 
 RAW_URL_PATTERN = re.compile(r'https?://[^\s"\'>)]+')
@@ -220,10 +227,63 @@ def _has_disallowed_extension(url: str) -> bool:
     path = urlparse(url).path.lower()
     return any(path.endswith(ext) for ext in DISALLOWED_EXTENSIONS)
 
-def _is_blocked_link(url: str) -> bool:
+
+def _is_editorial_subdomain(url: str) -> bool:
+    """Check if URL is from editorial content (blog, news, articles, etc.)
+    
+    Works for any organization by detecting universal editorial patterns:
+    - Subdomains: blog.*, news.*, press.*
+    - Paths: /blog/, /news/, /articles/, /press/, /stories/
+    - Date-based URLs: /2024/01/, /2025/11/20/
+    - Known news organizations
+    """
     parsed = urlparse(url)
     host = _normalized_host(url)
     path = parsed.path.lower()
+    
+    if not host:
+        return False
+    
+    # 1. Editorial subdomains (works for ANY org: blog.company.com, news.startup.io)
+    editorial_subdomains = ['blog.', 'news.', 'press.', 'stories.', 'medium.com']
+    if any(subdomain in host for subdomain in editorial_subdomains):
+        return True
+    
+    # 2. Editorial path patterns (works for company.com/blog/, etc.)
+    editorial_paths = ['/blog/', '/news/', '/articles/', '/article/', '/press/', '/stories/', '/post/', '/posts/']
+    if any(pattern in path for pattern in editorial_paths):
+        return True
+    
+    # 3. Date-based URLs (common in blogs/news: /2024/11/20/article-title)
+    # Matches patterns like /YYYY/MM/ or /YYYY/MM/DD/
+    import re
+    date_pattern = re.compile(r'/\d{4}/\d{1,2}/')
+    if date_pattern.search(path):
+        return True
+    
+    # 4. Known news organizations (major publications that don't use blog subdomain)
+    known_news_sites = [
+        'nytimes.com', 'bbc.com', 'bbc.co.uk', 'reuters.com', 'theguardian.com', 
+        'washingtonpost.com', 'wsj.com', 'ft.com', 'bloomberg.com', 'apnews.com',
+        'techcrunch.com', 'arstechnica.com', 'theverge.com', 'wired.com', 'cnet.com',
+        'zdnet.com', 'engadget.com', 'gizmodo.com', 'theregister.com', 'venturebeat.com'
+    ]
+    if any(host.endswith(suffix) for suffix in known_news_sites):
+        return True
+    
+    return False
+
+def _is_blocked_link(url: str, source_url: str = None) -> bool:
+    """Check if a URL should be blocked from being followed.
+    
+    Args:
+        url: The link to check
+        source_url: The page where this link was found (optional, for context-aware filtering)
+    """
+    parsed = urlparse(url)
+    host = _normalized_host(url)
+    path = parsed.path.lower()
+    query = parsed.query.lower()
 
     if not host:
         return False
@@ -236,21 +296,65 @@ def _is_blocked_link(url: str) -> bool:
     if any(host == suffix or host.endswith(f".{suffix}") for suffix in LINK_BLOCKLIST_SUFFIXES):
         return True
     
-    # Check social share hosts
+    # Block Google services (accounts, consent, etc.)
+    google_blocked = {'accounts.google.com', 'consent.google.com', 'policies.google.com', 'myaccount.google.com'}
+    if host in google_blocked or 'withgoogle.com' in host:
+        return True
+    
+    # Block social media completely
     if any(host == suffix or host.endswith(f".{suffix}") for suffix in SOCIAL_SHARE_HOSTS):
-        haystack = f"{parsed.path} {parsed.query}".lower()
-        if any(keyword in haystack for keyword in SOCIAL_SHARE_KEYWORDS):
+        return True
+    
+    # --- Domain-Aware Filtering ---
+    # If source is editorial content from an organization, block links to the same org's marketing pages
+    if source_url:
+        source_host = _normalized_host(source_url)
+        # Extract base domain (e.g., 'cloudflare.com' from 'blog.cloudflare.com' or 'www.cloudflare.com')
+        def _base_domain(hostname):
+            parts = hostname.split('.')
+            if len(parts) >= 2:
+                return '.'.join(parts[-2:])
+            return hostname
+        
+        source_base = _base_domain(source_host)
+        target_base = _base_domain(host)
+        
+        # If source is editorial and target is same organization but NOT editorial
+        if source_base == target_base and _is_editorial_subdomain(source_url) and not _is_editorial_subdomain(url):
+            # Block same-org marketing pages when source is editorial
+            logger.debug(f"Blocking same-org marketing link: {url} (from editorial source {source_url})")
             return True
-            
-    # Check path blocklist (New)
+    
+    # Block generic landing pages (just domain root with no path)
+    # e.g. workers.cloudflare.com, reactflow.dev, svelteflow.dev
+    if path in ('/', ''):
+        # Allow blog roots and news sites
+        if not any(pattern in host for pattern in ['blog.', 'news.', 'www.nytimes.', 'www.bbc.', 'www.reuters.', 'techcrunch.']):
+            return True
+    
+    # Check path blocklist
     if any(blocked_path in path for blocked_path in URL_PATH_BLOCKLIST):
         return True
 
-    # Check subdomain keywords (New)
-    # e.g. help.nytimes.com -> 'help' is in the host parts
+    # Check subdomain keywords
     host_parts = host.split('.')
-    blocked_subdomains = {'help', 'support', 'store', 'shop', 'account', 'auth', 'login', 'subscribe', 'myaccount'}
+    blocked_subdomains = {'help', 'support', 'store', 'shop', 'account', 'auth', 'login', 'subscribe', 'myaccount', 'accounts', 'workers', 'dash', 'developers'}
     if any(part in blocked_subdomains for part in host_parts):
+        # Exception: developers.domain.com/blog is OK
+        if 'developers' in host_parts and '/blog' not in path:
+            return True
+        elif 'developers' not in host_parts:
+            return True
+    
+    # Block tracking and social share query parameters
+    blocked_params = {'trk=', 'utm_', 'fbclid', 'gclid', 'ref=', 'cbrd', 'gae='}
+    if any(param in query for param in blocked_params):
+        return True
+    
+    # Block completely unrelated domains (not news/blog sites)
+    # Only allow links that are likely editorial content
+    unrelated_patterns = ['flow.dev', 'flow.com', 'reactflow', 'svelteflow', 'xyflow']
+    if any(pattern in host for pattern in unrelated_patterns):
         return True
 
     return False
@@ -432,7 +536,7 @@ def fetch_article_content(url: str) -> tuple[dict[str, Any], str] | None:
         absolute = urljoin(url, normalized)
         if not absolute.startswith("http"):
             return
-        if _is_blocked_link(absolute):
+        if _is_blocked_link(absolute, source_url=url):  # Pass source URL for context
             return
         if absolute in seen_links:
             return
