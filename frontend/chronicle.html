@@ -1595,7 +1595,6 @@
                       </div>
                     </div>
                     {vizMode === 'network' && (() => {
-                      const width = 1200;
                       const levels = {};
                       graphData.nodes.forEach(n => {
                         const d = n.depth || 0;
@@ -1603,13 +1602,19 @@
                         levels[d].push(n);
                       });
 
-                      // Calculate dynamic height based on max nodes in any level
+                      // Calculate dynamic dimensions based on graph extent
                       const maxNodesInLevel = Math.max(1, ...Object.values(levels).map(arr => arr.length));
+                      const maxDepth = Math.max(0, ...Object.keys(levels).map(Number));
+
+                      // Dynamic width: allocate more horizontal space for deeper graphs
+                      const minLayerWidth = 200; // Minimum horizontal space per depth level
+                      const width = Math.max(1200, (maxDepth + 2) * minLayerWidth);
+
+                      // Dynamic height: allocate more vertical space for levels with many nodes
                       const minSpacing = 80; // Minimum 80px between node centers
                       const height = Math.max(500, maxNodesInLevel * minSpacing + 100);
 
                       const layoutNodes = [];
-                      const maxDepth = Math.max(0, ...Object.keys(levels).map(Number));
                       const layerWidth = width / (maxDepth + 2);
 
                       Object.keys(levels).forEach(d => {
