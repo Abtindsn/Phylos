@@ -71,6 +71,17 @@ SOCIAL_SHARE_HOSTS = {
     "whatsapp.com",
 }
 SOCIAL_SHARE_KEYWORDS = {"share", "sharer", "intent", "compose", "bookmark", "login", "post"}
+
+# New: Blocklist for URL paths that indicate non-editorial content
+URL_PATH_BLOCKLIST = {
+    "/store", "/shop", "/cart", "/checkout", "/product", "/collection",
+    "/help", "/support", "/faq", "/contact",
+    "/login", "/signin", "/signup", "/register", "/account", "/auth",
+    "/privacy", "/terms", "/legal", "/policy", "/cookie", "/gdpr",
+    "/search", "/subscribe", "/membership", "/donate", "/subscription",
+    "/ads", "/advertising", "/sitemap", "/feed", "/rss"
+}
+
 RAW_URL_PATTERN = re.compile(r'https?://[^\s"\'>)]+')
 DISALLOWED_EXTENSIONS = {
     ".jpg", ".jpeg", ".png", ".gif", ".bmp", ".svg", ".webp", ".webm", ".mp4", ".mp3", ".mov",
@@ -210,18 +221,38 @@ def _has_disallowed_extension(url: str) -> bool:
     return any(path.endswith(ext) for ext in DISALLOWED_EXTENSIONS)
 
 def _is_blocked_link(url: str) -> bool:
+    parsed = urlparse(url)
     host = _normalized_host(url)
+    path = parsed.path.lower()
+
     if not host:
         return False
+    
+    # Check extension
     if _has_disallowed_extension(url):
         return True
+    
+    # Check host blocklist
     if any(host == suffix or host.endswith(f".{suffix}") for suffix in LINK_BLOCKLIST_SUFFIXES):
         return True
+    
+    # Check social share hosts
     if any(host == suffix or host.endswith(f".{suffix}") for suffix in SOCIAL_SHARE_HOSTS):
-        parsed = urlparse(url)
         haystack = f"{parsed.path} {parsed.query}".lower()
         if any(keyword in haystack for keyword in SOCIAL_SHARE_KEYWORDS):
             return True
+            
+    # Check path blocklist (New)
+    if any(blocked_path in path for blocked_path in URL_PATH_BLOCKLIST):
+        return True
+
+    # Check subdomain keywords (New)
+    # e.g. help.nytimes.com -> 'help' is in the host parts
+    host_parts = host.split('.')
+    blocked_subdomains = {'help', 'support', 'store', 'shop', 'account', 'auth', 'login', 'subscribe', 'myaccount'}
+    if any(part in blocked_subdomains for part in host_parts):
+        return True
+
     return False
 
 def _has_future_date(url: str) -> bool:
@@ -336,15 +367,33 @@ def fetch_article_content(url: str) -> tuple[dict[str, Any], str] | None:
 
     raw_html = response.text
     soup = BeautifulSoup(raw_html, "html.parser")
-    for tag in soup(["script", "style", "noscript", "svg", "form", "header", "footer", "nav"]):
+    
+    # --- Enhanced DOM Cleaning ---
+    # Remove non-content elements (nav, footer, ads, sidebars)
+    for tag in soup(["script", "style", "noscript", "svg", "form", "header", "footer", "nav", "iframe", "button"]):
         tag.decompose()
+        
+    # Remove elements by class/id patterns that indicate noise
+    noise_patterns = re.compile(r"sidebar|widget|ad-|ads|banner|promo|related|recommend|share|social|comment|login|signup|subscribe|menu|nav|footer|header", re.I)
+    for tag in soup.find_all(attrs={"class": noise_patterns}):
+        tag.decompose()
+    for tag in soup.find_all(attrs={"id": noise_patterns}):
+        tag.decompose()
+
+    # --- Content Targeting ---
+    # Try to find the main article body
+    article_body = soup.find("article") or soup.find("main") or soup.find(class_=re.compile(r"article-body|story-body|entry-content|post-content"))
+    
+    # If we found a specific content area, use that for text and link extraction
+    # Otherwise, fall back to the cleaned soup
+    search_scope = article_body if article_body else soup
 
     paragraphs = [
         p.get_text(" ", strip=True)
-        for p in soup.find_all("p")
+        for p in search_scope.find_all("p")
         if p.get_text(strip=True)
     ]
-    content = "\n\n".join(paragraphs) or soup.get_text(" ", strip=True)
+    content = "\n\n".join(paragraphs) or search_scope.get_text(" ", strip=True)
     content = content.strip()
     if not content:
         logger.warning("No readable text extracted from %s. Skipping.", url)
@@ -390,7 +439,8 @@ def fetch_article_content(url: str) -> tuple[dict[str, Any], str] | None:
         seen_links.add(absolute)
         outbound_links.append(absolute)
 
-    for anchor in soup.find_all("a", href=True):
+    # Extract links ONLY from the targeted search scope (article body)
+    for anchor in search_scope.find_all("a", href=True):
         _append_link(anchor["href"])
 
     for link_tag in soup.find_all("link", href=True):
@@ -418,6 +468,11 @@ def fetch_article_content(url: str) -> tuple[dict[str, Any], str] | None:
 
     base_host = _normalized_host(url)
     def _discover_hidden_links():
+        # Only run this if we found NO links in the DOM, as a last resort.
+        # And even then, be very strict.
+        if outbound_links: 
+            return []
+            
         if not raw_html:
             return []
         discovered: List[str] = []
@@ -449,8 +504,9 @@ def fetch_article_content(url: str) -> tuple[dict[str, Any], str] | None:
             else:
                 off_domain_links.append(link)
         prioritized_links = off_domain_links + on_domain_links
-
-    if len([link for link in prioritized_links if _normalized_host(link) != base_host]) < 2:
+    
+    # Only fall back to hidden links if we have absolutely nothing
+    if not prioritized_links:
         hidden = _discover_hidden_links()
         prioritized_links.extend(hidden)
 
